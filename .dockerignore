@@ -1,0 +1,16 @@
+# The whole build context is uploaded to the Docker daemon on every build, so
+# this file is mostly about speed — plus one correctness trap.
+
+# .venv holds macOS/arm64 Python 3.14 binaries. In a linux 3.11 image they are
+# broken as well as large, and must never shadow what pip installs.
+.venv
+.git
+
+# Scraped traffic history grows with every collect run. Inside the context it
+# would invalidate the cache and force a full rebuild each time it changed.
+data
+outputs
+**/*.parquet
+
+# A bare "__pycache__" would only match at the root; ** catches the nested ones.
+**/__pycache__
