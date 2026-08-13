@@ -12,6 +12,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Read once at import. Env can't change inside a running pod, and /work sits on
 # the latency path we're measuring — no getenv in the hot loop.
@@ -37,6 +38,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# The hinge of the whole loop: Prometheus scrapes /metrics every 15s, and the
+# http_requests_total counter exposed here is the raw signal collect.py records
+# and the forecaster learns from. No metrics, no history, no model.
+Instrumentator().instrument(app).expose(app)
 
 
 # Sync def, NOT async def: FastAPI runs sync handlers in a threadpool. An async

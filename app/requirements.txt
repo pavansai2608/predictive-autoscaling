@@ -3,3 +3,4 @@
 # for both benchmark arms — so it can't bias the HPA-vs-predictive comparison.
 fastapi
 uvicorn
+prometheus-fastapi-instrumentator
