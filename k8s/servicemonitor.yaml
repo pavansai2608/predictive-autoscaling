@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: traffic-app
+  # No namespace field, like the other manifests, so `kubectl apply -f k8s/`
+  # lands this in default beside the Service. That placement is required, not
+  # cosmetic: a ServiceMonitor's selector only looks in its OWN namespace.
+  labels:
+    # The chart's default is to discover only ServiceMonitors carrying its
+    # release label. This install turned that off (serviceMonitorSelector is
+    # {}), so the label changes nothing today — it is here so the manifest
+    # still works if that flag is ever reverted to the chart default.
+    release: monitoring
+    app: traffic-app
+spec:
+  selector:
+    matchLabels:
+      # Matches the SERVICE's labels, not the pods'. The operator resolves the
+      # Service to its Endpoints and scrapes the pod IPs behind it — which is
+      # why only Ready pods get scraped, same gate as real traffic.
+      app: traffic-app
+  endpoints:
+      # "http" is the port NAME from service.yaml, not a number. Give a name no
+      # service port matches and the operator drops it silently: no error, and
+      # the target simply never appears in Prometheus.
+    - port: http
+      path: /metrics
+      # Same 15s as the stack's global interval, so the history collect.py
+      # records has one consistent sample spacing for the model to learn from.
+      interval: 15s
