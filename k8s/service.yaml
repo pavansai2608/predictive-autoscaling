@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: traffic-app
+  labels:
+    app: traffic-app
+spec:
+  # ClusterIP: in-cluster only. k6 reaches it through `kubectl port-forward`, so
+  # both benchmark arms traverse exactly the same path and neither gets an
+  # advantage from a different ingress route.
+  type: ClusterIP
+  selector:
+    # Matches the pod template labels in deployment.yaml. This is also where the
+    # readiness probe earns its keep: only Ready pods become endpoints here, so a
+    # pod still in its 15s warm-up never receives a request.
+    app: traffic-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-app
+  labels:
+    app: traffic-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: traffic-app
+  template:
+    metadata:
+      labels:
+        app: traffic-app
+    spec:
+      containers:
+        - name: traffic-app
+          image: traffic-app:v1
+          # The image lives only in the kind node's containerd store, put there by
+          # `kind load`. Any pull would fail — there is no registry behind this tag.
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: WORK_MS
+              value: "30"
+            - name: STARTUP_DELAY_S
+              value: "15"
+          resources:
+            requests:
+              # HPA measures CPU as a percentage OF REQUESTS, so this 200m is the
+              # denominator the entire baseline arm scales on. Leave it unset and
+              # HPA has nothing to divide by, reports <unknown>, and never scales.
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              # Caps one pod's throughput so capacity is finite and adding pods
+              # actually buys headroom — an unthrottled busy-loop would let a
+              # single pod eat the node and hide the need to scale at all.
+              cpu: 400m
+              memory: 256Mi
+          readinessProbe:
+            # The app binds its port only after a 15s sleep, so a pod is Running
+            # long before it can serve. This is what keeps the Service from routing
+            # traffic into a dead socket — i.e. it is the measured startup lag that
+            # makes reactive scaling late, made visible to Kubernetes.
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 3
