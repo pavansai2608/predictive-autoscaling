@@ -1,0 +1,5 @@
+# Plain uvicorn, not uvicorn[standard]: the extras (uvloop, httptools) have no
+# Python 3.14 wheels guaranteed yet, and the pure-asyncio server is identical
+# for both benchmark arms — so it can't bias the HPA-vs-predictive comparison.
+fastapi
+uvicorn
