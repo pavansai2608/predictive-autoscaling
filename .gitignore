@@ -1,0 +1,27 @@
+# macOS writes this into every folder it opens in Finder. Pure noise.
+.DS_Store
+
+# Local Python environment: 500MB of arm64 binaries that would be wrong on any
+# other machine anyway. requirements.txt is what makes the env reproducible.
+.venv/
+**/__pycache__/
+*.pyc
+
+# k6 writes its whole run log here, and it grows for days. nohup.out is the
+# same idea when a background job's output is not redirected.
+*.log
+nohup.out
+
+# REGENERABLE from data/traffic.parquet — outputs/ comes from backtest.py,
+# models/ from train_final.py. Committing them would mean a stale model in the
+# repo silently disagreeing with the code that produced it.
+outputs/
+models/
+
+# Written by controller.py, one row per 30s decision. Per-run evidence, not
+# source. The benchmark results that matter get summarised into results.md.
+logs/
+
+# NOT ignored: data/traffic.parquet. It is small (a few hundred KB) and it is
+# the one artefact here that CANNOT be regenerated — Prometheus keeps only 15
+# days, so once a scrape ages out, that history is gone for good.
