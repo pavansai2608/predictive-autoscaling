@@ -37,12 +37,18 @@ spec:
           image: grafana/k6:latest
           args: ["run", "/scripts/daily.js"]
           env:
-            # Requests/second at the busy plateau. 100 req/s at the plateau = 5-6 pods at the measured 20 req/s
-            # per pod, and a 2.2x spike reaches ~220 req/s = ~12 pods. That
-            # keeps the interesting range well inside MIN_PODS..MAX_PODS while
-            # leaving CPU headroom on a 10-core node shared with Prometheus.
+            # Requests/second at the busy plateau. Sized against how the HPA
+            # ACTUALLY behaves, not against true pod capacity: it targets 60%
+            # of requests.cpu (200m), so it adds a pod roughly every 4.7 req/s
+            # even though one pod can serve ~15. At 100 it therefore sat pinned
+            # at maxReplicas=20 continuously — no room left to react to a
+            # spike, and the laptop running flat out for nothing.
+            #
+            #   40 req/s plateau -> ~9 pods under the HPA, ~3 predictive
+            #   88 req/s spike   -> ~19 pods, still inside the 20 cap
+            #   4-7 req/s quiet  -> back down to MIN_PODS=2 overnight
             - name: PEAK_RPS
-              value: "100"
+              value: "40"
             # In-cluster DNS for the Service. Overridable so the same script
             # still runs from the laptop against a port-forward if needed.
             - name: TARGET
