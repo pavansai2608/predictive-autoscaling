@@ -1,0 +1,39 @@
+# HOST dependencies — the forecasting pipeline that runs on the Mac.
+#
+# Deliberately NOT app/requirements.txt: that one is COPYed into the Docker
+# image, and the container only ever serves FastAPI. pyarrow alone would add
+# ~100MB of Arrow libraries to every pod for code the pod never runs.
+#
+#     pip install -r requirements.txt
+#
+# Versions pinned to what is known to work on Python 3.14.2 / Apple Silicon.
+# 3.14 is new enough that wheel availability is a real risk, so a set that
+# actually resolved is worth recording rather than rediscovering.
+
+# --- data + numerics ---------------------------------------------------------
+pandas==3.0.5
+numpy==2.5.2
+
+# pandas does NOT write Parquet itself — it delegates to pyarrow or fastparquet
+# and ships neither. Omitting this is not a missing nice-to-have: collect.py
+# runs to completion and dies on its final line, AFTER the data is fetched.
+# fastparquet is the fallback if a pyarrow wheel is ever unavailable.
+pyarrow==25.0.1
+
+# --- the metrics source ------------------------------------------------------
+prometheus-api-client==0.7.2
+
+# --- the model ---------------------------------------------------------------
+# The quantile objective (alpha=0.90) is the reason for LightGBM specifically.
+# models.py falls back to sklearn's HistGradientBoostingRegressor if this is
+# absent, so the pipeline survives without it — but that path is untested here.
+lightgbm==4.7.0
+joblib==1.5.3
+
+# --- output ------------------------------------------------------------------
+matplotlib==3.11.1     # backtest.py writes outputs/forecast.png via the Agg backend
+
+# --- the hands ---------------------------------------------------------------
+# controller.py patches deployment scale. Loaded from ~/.kube/config because
+# this runs on the laptop, not inside a pod.
+kubernetes==36.0.3
