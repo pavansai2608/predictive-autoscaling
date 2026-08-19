@@ -22,6 +22,19 @@ OUT = Path("data/traffic.parquet")
 # higher rate, which adds pods. src/live.py MUST use this identical query.
 QUERY = 'sum(rate(http_requests_total{handler="/work"}[1m]))'
 
+# Anything before this instant was recorded through a BROKEN load path and must
+# never reach the model. Until 2026-08-19 the load generator ran on the Mac
+# behind `kubectl port-forward`, which pins every request to a single pod, so
+# the recorded rate was one pod's ceiling rather than real demand — and while
+# the forward was down, macOS AirPlay answered on port 5000 with instant 403s,
+# recording an hour of silence as if traffic had stopped.
+#
+# A cutoff is needed rather than just deleting the parquet: every run re-reads
+# a 6h window, so deleted rows come straight back out of Prometheus. Once the
+# bad period is more than LOOKBACK old this line stops doing anything, and it
+# is then safe to remove.
+EARLIEST = pd.Timestamp("2026-08-19T11:53:00Z")
+
 # 6h of overlap gives every run a wide re-read, so a crash or a dead
 # port-forward costs nothing as long as the next run lands within the window.
 LOOKBACK = timedelta(hours=6)
@@ -61,7 +74,7 @@ def fetch() -> pd.DataFrame:
     # minute-of-day and day-of-week — cheap now, painful to retrofit later.
     df["ts"] = pd.to_datetime(df["ts"], unit="s", utc=True)
     df["y"] = pd.to_numeric(df["y"], errors="coerce")
-    return df.dropna()
+    return df[df["ts"] >= EARLIEST].dropna()
 
 
 def main() -> None:

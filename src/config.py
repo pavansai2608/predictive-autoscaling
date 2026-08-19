@@ -15,17 +15,22 @@ STEPS_PER_WEEK = STEPS_PER_CYCLE * WEEKEND_EVERY           # 1680
 # --- the forecast horizon ----------------------------------------------------
 # HOW FAR AHEAD TO PREDICT, in 15s steps.
 #
-# Set this from your MEASURED pod start-up time (Step 20), not a guess:
-#     horizon_seconds = average_pod_ready_time + 30s controller interval
-#     HORIZON_STEPS   = ceil(horizon_seconds / 15)
+# MEASURED on this cluster, 2026-08-19, not guessed. Three pods deleted and
+# timed from creationTimestamp to the Ready condition flipping True:
 #
-# Examples:  45s ready -> 75s  -> 5 steps
-#            60s ready -> 90s  -> 6 steps
-#            90s ready -> 120s -> 8 steps
+#     19s, 19s, 18s  ->  average 18.7s
+#
+#     horizon_seconds = 18.7 (pod ready) + 30 (controller interval) = 48.7s
+#     HORIZON_STEPS   = ceil(48.7 / 15) = 4
+#
+# The 19s is dominated by the app's own STARTUP_DELAY_S=15 (app/main.py), which
+# is deliberate: uvicorn awaits the lifespan sleep BEFORE binding the socket, so
+# the pod is unreachable for that whole window. Change that env var in
+# k8s/deployment.yaml and this number must be re-measured.
 #
 # Forecasting further ahead than you can act on is wasted accuracy; forecasting
 # less means capacity still arrives late. That is why this number is measured.
-HORIZON_STEPS = 6
+HORIZON_STEPS = 4
 
 # --- the cost of being wrong -------------------------------------------------
 # Under-provisioning means users hit a slow app. Over-provisioning means a

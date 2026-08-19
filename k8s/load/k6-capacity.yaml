@@ -1,0 +1,37 @@
+# Step 25: measure ONE pod's capacity.
+#
+# Lives in k8s/load/ rather than k8s/ on purpose. `kubectl apply -f k8s/` is
+# not recursive, so `make deploy` will not sweep this up — a Job that re-ran on
+# every deploy would start hammering the cluster in the middle of whatever else
+# was happening.
+#
+# Prerequisites, or you measure the wrong thing entirely:
+#   kubectl delete -f k8s/hpa.yaml            # nothing else may move replicas
+#   kubectl scale deploy/traffic-app --replicas=1
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-capacity
+spec:
+  # No retries. A failed capacity run needs reading, not silently repeating
+  # with the cluster in an unknown state.
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ["run", "/scripts/capacity.js"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests: {cpu: 200m, memory: 128Mi}
+            # Deliberately larger than the app pod's limit: the generator must
+            # never be the bottleneck, or you measure k6 instead of the app.
+            limits: {cpu: 1500m, memory: 512Mi}
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scripts

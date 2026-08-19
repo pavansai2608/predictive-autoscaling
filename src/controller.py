@@ -42,11 +42,21 @@ DEPLOYMENT = os.getenv("DEPLOYMENT", "traffic-app")
 NAMESPACE = os.getenv("NAMESPACE", "default")
 INTERVAL_S = int(os.getenv("INTERVAL_S", "30"))
 
-# Requests/second one pod serves comfortably. MEASURE this (Step 25): scale to
-# 1 replica, raise k6 load until p95 latency degrades. A wrong value here makes
-# every decision wrong in the same direction, and it is invisible in the
-# forecast metrics.
-CAPACITY_PER_POD = float(os.getenv("CAPACITY_PER_POD", "120"))
+# Requests/second one pod serves comfortably. MEASURED 2026-08-19 with
+# `make capacity` against a single replica (HPA deleted), stepping the arrival
+# rate 4 -> 28 req/s:
+#
+#     offered   served   p95     cpu
+#        12      12.0     95ms   0.35
+#        16      16.0     95ms   0.40   <- pinned at the 400m limit
+#        20      20.1     95ms   0.40   <- last flat step
+#        24      24.1    381ms   0.40   <- knee: 4x latency, no more throughput
+#
+# So 20, not the 120 this used to default to. A wrong value here makes every
+# decision wrong in the same direction and is invisible in the forecast
+# metrics — the forecast stays correct while the pod count silently does not.
+# Re-measure if WORK_MS or the CPU limit in k8s/deployment.yaml changes.
+CAPACITY_PER_POD = float(os.getenv("CAPACITY_PER_POD", "20"))
 
 HEADROOM = float(os.getenv("HEADROOM", "1.1"))
 MIN_PODS = int(os.getenv("MIN_PODS", "2"))

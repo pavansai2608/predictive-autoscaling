@@ -1,0 +1,66 @@
+# The load generator, running INSIDE the cluster.
+#
+# k6 has to live here rather than on the Mac because `kubectl port-forward
+# svc/traffic-app` pins every request to a single pod (measured: 6.94 req/s on
+# one pod, 0.00 on the other three). Load offered that way can never show a
+# benefit from scaling. Sending to the ClusterIP from a pod lets kube-proxy
+# spread connections across all Ready endpoints.
+#
+# The script comes from a ConfigMap built out of load/ by `make load-start`,
+# so load/daily.js stays the single source of truth and is not duplicated here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-load
+  labels:
+    app: k6-load
+spec:
+  # Scale to 0 to stop generating load, 1 to start. A Deployment rather than a
+  # Job so `kubectl scale` is the on/off switch and a crash restarts itself
+  # during a multi-day collection run.
+  replicas: 0
+  selector:
+    matchLabels:
+      app: k6-load
+  template:
+    metadata:
+      labels:
+        app: k6-load
+      annotations:
+        # Changing the ConfigMap does NOT restart a running pod, so a script
+        # edit would silently keep running the old version. `make load-start`
+        # does a rollout restart to force a re-read.
+        checksum/trigger: "manual-rollout"
+    spec:
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ["run", "/scripts/daily.js"]
+          env:
+            # Requests/second at the busy plateau. 100 req/s at the plateau = 5-6 pods at the measured 20 req/s
+            # per pod, and a 2.2x spike reaches ~220 req/s = ~12 pods. That
+            # keeps the interesting range well inside MIN_PODS..MAX_PODS while
+            # leaving CPU headroom on a 10-core node shared with Prometheus.
+            - name: PEAK_RPS
+              value: "100"
+            # In-cluster DNS for the Service. Overridable so the same script
+            # still runs from the laptop against a port-forward if needed.
+            - name: TARGET
+              value: "http://traffic-app/work"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              # k6 shares the node's 10 cores with the app pods and Prometheus.
+              # Capping it means a load generator that starves the very service
+              # it is measuring cannot happen quietly.
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scripts
