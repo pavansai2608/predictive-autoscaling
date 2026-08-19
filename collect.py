@@ -29,11 +29,18 @@ QUERY = 'sum(rate(http_requests_total{handler="/work"}[1m]))'
 # the forward was down, macOS AirPlay answered on port 5000 with instant 403s,
 # recording an hour of silence as if traffic had stopped.
 #
+# Moved forward a second time at 15:42Z, when PEAK_RPS dropped from 100 to 40.
+# The amplitude change is a REGIME change, not noise: the same minute of the
+# cycle meant 55.7 req/s on average before and 32.0 after. A model trained
+# across it learns that identical clock features predict two different answers,
+# which shows up as irreducible error and makes the backtest understate the
+# model rather than overstate it.
+#
 # A cutoff is needed rather than just deleting the parquet: every run re-reads
 # a 6h window, so deleted rows come straight back out of Prometheus. Once the
-# bad period is more than LOOKBACK old this line stops doing anything, and it
-# is then safe to remove.
-EARLIEST = pd.Timestamp("2026-08-19T11:53:00Z")
+# discarded period is more than LOOKBACK old this line stops doing anything,
+# and it is then safe to remove.
+EARLIEST = pd.Timestamp("2026-08-19T15:42:00Z")
 
 # 6h of overlap gives every run a wide re-read, so a crash or a dead
 # port-forward costs nothing as long as the next run lands within the window.
