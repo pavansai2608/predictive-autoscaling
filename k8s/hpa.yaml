@@ -31,9 +31,26 @@ spec:
         name: cpu
         target:
           type: Utilization
-          # 60% of the 200m REQUEST (not the 400m limit) — so the HPA acts at
-          # 120m per pod. Measured capacity is 20 req/s at a pinned 400m, which
-          # means CPU is already saturated well before latency degrades; 60% is
-          # the conventional default and deliberately left conventional, since
-          # a hand-tuned baseline would be a straw man in both directions.
-          averageUtilization: 60
+          # 90% of a 400m request, i.e. act at 360m per pod.
+          #
+          # This is the number that makes the A/B fair, and it is set from the
+          # capacity measurement rather than from convention. Measured CPU vs
+          # offered rate on one pod:
+          #
+          #     8 req/s -> 0.25 cores    16 req/s -> 0.39
+          #    12 req/s -> 0.35          20 req/s -> 0.40 (p95 still 95ms)
+          #
+          # so ~25m of CPU per req/s. 360m therefore trips at ~12.4 req/s, and
+          # at a 40 req/s plateau the HPA settles on ~4 pods. The predictive
+          # controller lands on ceil(40 * 1.1 / 20) = 3. Close enough that the
+          # two arms hold comparable capacity at steady state, which is the
+          # whole point: the benchmark must compare REACTION TIMING, not
+          # provisioning generosity. At the old 60%-of-200m the HPA sat at ~7
+          # pods for the same traffic and any latency win would have been
+          # explained by the extra capacity, not by the forecast.
+          #
+          # 90 is high for an HPA target and that is defensible here: this pod
+          # is deliberately CPU-bound with a hard limit, and latency stays flat
+          # at 95ms right up to the limit. A general-purpose service with
+          # bursty CPU should not copy this number.
+          averageUtilization: 90

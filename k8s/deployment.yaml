@@ -29,16 +29,26 @@ spec:
             - name: STARTUP_DELAY_S
               value: "15"
           resources:
+            # requests == limits, deliberately. The HPA measures CPU as a
+            # percentage OF REQUESTS, so when the two differ the baseline arm
+            # scales against a number unrelated to real capacity. With
+            # requests=200m and limits=400m it added a pod at ~6 req/s while a
+            # pod actually serves 20 — measured 20 replicas each sitting at
+            # 123m, all of them 31% utilised, with the HPA reporting 58%/60%
+            # and believing itself on target.
+            #
+            # Equal values also give the pod Guaranteed QoS, so it is the last
+            # thing evicted under node pressure rather than the first — which
+            # matters when a benchmark run is what is being protected.
             requests:
-              # HPA measures CPU as a percentage OF REQUESTS, so this 200m is the
-              # denominator the entire baseline arm scales on. Leave it unset and
-              # HPA has nothing to divide by, reports <unknown>, and never scales.
-              cpu: 200m
-              memory: 128Mi
+              cpu: 400m
+              memory: 256Mi
             limits:
               # Caps one pod's throughput so capacity is finite and adding pods
               # actually buys headroom — an unthrottled busy-loop would let a
               # single pod eat the node and hide the need to scale at all.
+              # MEASURED at this limit: 20 req/s at p95 95ms, 22.5 req/s at
+              # 162ms. Change this and re-run `make capacity`.
               cpu: 400m
               memory: 256Mi
           readinessProbe:
