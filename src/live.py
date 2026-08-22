@@ -49,17 +49,38 @@ def fetch_recent(url: str = PROM_URL) -> pd.DataFrame:
     return df.dropna().reset_index(drop=True)
 
 
+# How much unbroken recent history a prediction requires, in steps. 120 steps
+# is 30 minutes: the longest NON-seasonal lag and rolling window build_table()
+# uses. The seasonal lags (240, 1680) are allowed to be missing - both model
+# backends route around NaN - but if the last half hour is full of holes then
+# lag_1, diff_1 and roll_mean_4 are all wrong, and those are the features the
+# model leans on hardest (lag_1 alone carries 221k of gain).
+RECENT_STEPS = 120
+
+
 def latest_feature_row(df: pd.DataFrame, horizon: int):
     """Build features and return the single most recent row.
 
     That row has no `target` - the future has not happened yet - which is
     exactly the difference between training (rows with answers) and inference
     (one row without one).
+
+    Returns (None, nan) when the recent window is too broken to answer from.
+    Declining is a real answer: controller.py logs a hold and leaves the
+    replica count alone, which is the correct move when the inputs are junk.
     """
     if df.empty:
         return None, float("nan")
 
-    table = F.build_table(df, horizon=horizon)
+    # SAME grid the training data was built on. Without this the lags are
+    # positional over whatever rows Prometheus happened to return.
+    grid = F.to_grid(df)
+
+    recent = grid.tail(RECENT_STEPS)
+    if len(recent) < RECENT_STEPS or recent["y"].isna().any():
+        return None, float("nan")
+
+    table = F.build_table(grid, horizon=horizon)
     row = table.iloc[[-1]]
-    current_rate = float(df["y"].iloc[-1])
+    current_rate = float(grid["y"].iloc[-1])
     return row, current_rate

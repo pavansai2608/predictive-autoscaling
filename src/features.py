@@ -34,34 +34,47 @@ LAGS = [1, 2, 3, 4, 6, 8, 12, 20, 40, 80, 120, C.STEPS_PER_CYCLE, C.STEPS_PER_WE
 ROLL_WINDOWS = [4, 12, 40, 120, C.STEPS_PER_CYCLE]
 
 
-def load_series(path: str = C.DATA_FILE) -> pd.DataFrame:
-    """Read the parquet the collector writes, and put it on a clean grid.
+def to_grid(df: pd.DataFrame) -> pd.DataFrame:
+    """Put a [ts, y] frame onto a fixed STEP_SECONDS grid.
 
-    Prometheus can miss a scrape (a restart, a paused laptop), which leaves
-    holes. Reindexing onto a fixed 15s grid makes "lag 240" mean a true one
-    cycle back rather than "240 rows back, whenever those happened to be" -
-    without this, every gap silently corrupts every seasonal feature.
+    CALLED BY BOTH PATHS - load_series() below for training, and
+    live.latest_feature_row() for inference. That shared call is the whole
+    point: Prometheus can miss a scrape (a restart, a sleeping laptop), which
+    leaves holes, and every lag in build_table() is positional. Reindexing
+    makes "lag 240" mean a true one cycle back rather than "240 rows back,
+    whenever those happened to be".
+
+    Skipping this on the serve side is not a small inaccuracy - it silently
+    asks the model a different question than it was trained on. Observed on
+    2026-08-22: the live window held 120 rows spanning 7.8 hours (1872 rows if
+    gapless, 13 gaps, the largest 79 minutes), and the controller forecast
+    ~52 req/s while traffic was steady at ~36.
     """
+    d = df[["ts", "y"]].copy()
+    d["ts"] = pd.to_datetime(d["ts"], utc=True)
+    d = d.dropna(subset=["ts"]).drop_duplicates(subset="ts").sort_values("ts")
+
+    grid = pd.date_range(d["ts"].min(), d["ts"].max(),
+                         freq=f"{C.STEP_SECONDS}s", tz="UTC")
+    d = d.set_index("ts").reindex(grid)
+    d.index.name = "ts"
+
+    # Short gaps get bridged; long outages stay NaN and are dropped later.
+    # Inventing hours of traffic that never happened would teach the model a
+    # pattern that does not exist.
+    d["y"] = d["y"].interpolate(limit=8).astype(float)
+
+    return d.reset_index()
+
+
+def load_series(path: str = C.DATA_FILE) -> pd.DataFrame:
+    """Read the parquet the collector writes, on the same grid inference uses."""
     df = pd.read_parquet(path)
 
     if "ts" not in df.columns or "y" not in df.columns:
         raise ValueError(f"expected columns [ts, y], found {list(df.columns)}")
 
-    df = df[["ts", "y"]].copy()
-    df["ts"] = pd.to_datetime(df["ts"], utc=True)
-    df = df.dropna(subset=["ts"]).drop_duplicates(subset="ts").sort_values("ts")
-
-    grid = pd.date_range(df["ts"].min(), df["ts"].max(),
-                         freq=f"{C.STEP_SECONDS}s", tz="UTC")
-    df = df.set_index("ts").reindex(grid)
-    df.index.name = "ts"
-
-    # Short gaps get bridged; long outages stay NaN and are dropped later.
-    # Inventing hours of traffic that never happened would teach the model a
-    # pattern that does not exist.
-    df["y"] = df["y"].interpolate(limit=8).astype(float)
-
-    return df.reset_index()
+    return to_grid(df)
 
 
 def build_table(df: pd.DataFrame, horizon: int = C.HORIZON_STEPS) -> pd.DataFrame:
