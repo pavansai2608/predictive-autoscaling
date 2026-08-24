@@ -112,13 +112,29 @@ def build_table(df: pd.DataFrame, horizon: int = C.HORIZON_STEPS) -> pd.DataFram
     d["vs_prev_cycle"] = d["roll_mean_12"] / prev.replace(0, np.nan)
 
     # ---- clock features of the moment being predicted -----------------------
-    # Position within the k6 cycle, measured as elapsed time since the first
-    # sample. That is offset from k6's true cycle start by a constant, which
-    # does not matter: a constant phase shift is something the model learns
-    # once. (If k6 is restarted mid-collection the phase jumps - the lag_240
-    # feature is phase-independent and carries the seasonality either way.)
+    # Position within the k6 cycle, anchored to the UNIX EPOCH rather than to
+    # this frame's first row.
+    #
+    # Anchoring to d["ts"].iloc[0] looks equivalent and is not. Training passes
+    # the whole parquet, so row 0 is a fixed instant. Inference passes a window
+    # that slides with the wall clock, so row 0 moves - and the LAST row, the
+    # only one being predicted, always lands the same distance from it.
+    # Measured on 2026-08-24: f_pos_in_cycle read 142.0 on three consecutive
+    # live fetches, i.e. the model's "where are we in the day" input was a
+    # constant at serve time while it varied across the whole range in
+    # training. Same column name, different question.
+    #
+    # An epoch anchor is identical in both paths by construction. It is offset
+    # from k6's true cycle start by a constant, which does not matter: a
+    # constant phase shift is something the model learns once.
+    # Subtracting a fixed epoch and asking for total_seconds() is deliberate:
+    # .astype("int64") returns the underlying integer in whatever unit the dtype
+    # happens to use - pandas 3 builds these ranges as datetime64[us], so a
+    # nanosecond assumption silently floors every row in an hour to the same
+    # value. total_seconds() is unit-agnostic.
     future_ts = d["ts"] + pd.Timedelta(seconds=horizon * C.STEP_SECONDS)
-    elapsed = (future_ts - d["ts"].iloc[0]).dt.total_seconds() / C.STEP_SECONDS
+    epoch = pd.Timestamp("1970-01-01", tz="UTC")
+    elapsed = (future_ts - epoch).dt.total_seconds() // C.STEP_SECONDS
 
     pos = elapsed % C.STEPS_PER_CYCLE                 # where in the "day"
     cycle_no = (elapsed // C.STEPS_PER_CYCLE).astype(int)

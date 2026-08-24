@@ -5,7 +5,7 @@ PROM_PORT = 9090
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
 .PHONY: run build load deploy pods forward-app forward-prom \
-        load-start load-stop capacity collect
+        load-start load-stop capacity collect bench
 
 # Local dev loop: 1s warm-up instead of 15s, and restart on every save.
 run:
@@ -70,3 +70,36 @@ capacity:
 # permanently; every 10 minutes just means a crash costs at most 10 minutes.
 collect:
 	while true; do python collect.py; sleep 600; done
+
+# --- the A/B benchmark -------------------------------------------------------
+# One 20-minute run:   make bench RUN=A1
+#
+# Records the k6 summary to bench/<RUN>.json plus the run's start/end epoch to
+# bench/<RUN>.start and .end. Pod-seconds is not captured live: Prometheus
+# already stores the replica count and keeps 15 days, so analyze.py replays the
+# window afterwards. That is half the result — a latency win bought with far
+# more compute is not a win, and a benchmark reporting only p99 is not honest.
+#
+# The continuous daily.js load MUST be off (`make load-stop`) or both arms are
+# serving a second, uncontrolled workload on top of the exam paper.
+# SCRIPT selects the scenario, default benchmark.js (the 4x step). Use
+# SCRIPT=ramp.js for the predictable-ramp scenario — the one a forecaster can
+# actually anticipate. Run names should say which: A1s/B1s for step,
+# A1r/B1r for ramp, or the two scenarios' results get averaged together.
+bench:
+	@test -n "$(RUN)" || (echo "usage: make bench RUN=A1 [SCRIPT=ramp.js]"; exit 1)
+	@test "$$(kubectl get deploy k6-load -o jsonpath='{.spec.replicas}')" = "0" \
+	  || (echo "ERROR: daily.js load is still running — run 'make load-stop' first"; exit 1)
+	kubectl delete job k6-benchmark --ignore-not-found
+	kubectl create configmap k6-scripts --from-file=load/ --dry-run=client -o yaml | kubectl apply -f -
+	@mkdir -p bench
+	@sed -e 's/PLACEHOLDER/$(RUN)/' -e 's/SCRIPTNAME/$(or $(SCRIPT),benchmark.js)/' \
+	  k8s/load/k6-benchmark.yaml | kubectl apply -f -
+	@echo "run $(RUN) started — 20 minutes"
+	@date -u +%s > bench/$(RUN).start
+	kubectl wait --for=condition=complete job/k6-benchmark --timeout=30m
+	@kubectl logs job/k6-benchmark \
+	  | sed -n '/===BENCH_JSON_START===/,/===BENCH_JSON_END===/p' \
+	  | sed '1d;$$d' > bench/$(RUN).json
+	@date -u +%s > bench/$(RUN).end
+	@echo "wrote bench/$(RUN).json  (window $(RUN).start -> $(RUN).end)"

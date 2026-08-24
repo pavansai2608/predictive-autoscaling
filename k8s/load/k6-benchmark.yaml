@@ -1,0 +1,43 @@
+# One benchmark run. `make bench RUN=A1` fills in the name and starts it.
+#
+# In k8s/load/ so `kubectl apply -f k8s/` (not recursive) cannot sweep it up —
+# a benchmark Job that fired on every deploy would corrupt whatever run was in
+# progress.
+#
+# The Job is deleted and recreated per run rather than reused, so RUN_NAME and
+# the logs belong to exactly one 20-minute window.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-benchmark
+spec:
+  # A retry would silently start a second 20-minute run against a cluster left
+  # in whatever state the first one ended in. A failed benchmark run needs
+  # reading, not repeating.
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ["run", "/scripts/SCRIPTNAME"]   # filled by `make bench`
+          env:
+            - name: RUN_NAME
+              value: "PLACEHOLDER"     # replaced by `make bench RUN=...`
+            - name: TARGET
+              value: "http://traffic-app/work"
+            - name: STEADY_RPS
+              value: "20"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests: {cpu: 500m, memory: 256Mi}
+            # Well above the app pods' 400m: the generator must never be the
+            # bottleneck, or the benchmark measures k6 rather than the service.
+            limits: {cpu: 2000m, memory: 1Gi}
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-scripts

@@ -61,3 +61,19 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 3
+            # A PROBE MUST DETECT "DEAD", NOT "BUSY".
+            #
+            # With the defaults (timeoutSeconds 1, failureThreshold 3) benchmark
+            # run A1 collapsed: the 4x step put 60 req/s on each of 2 pods that
+            # serve 20, the busy-loop threadpool starved the event loop, /healthz
+            # missed its 1s deadline, and Kubernetes pulled the pod from the
+            # Service. That shifted its load onto the survivor, which then failed
+            # the same way — available replicas hit ZERO mid-spike, p99 reached
+            # 19.8s, and the HPA stalled at 3 pods because NotReady pods report
+            # no CPU metrics to scale on.
+            #
+            # 3s x 6 failures = ~18s of sustained non-response before eviction,
+            # comfortably longer than any latency spike a saturated pod produces
+            # here, still fast enough to catch a genuinely hung process.
+            timeoutSeconds: 3
+            failureThreshold: 6
