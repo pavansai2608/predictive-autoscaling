@@ -18,7 +18,9 @@ arrives — then prove the benefit with an A/B benchmark against stock HPA under
 ## Architecture — a closed loop
 
 ```
-load/daily.js (k6)  ->  localhost:5000  --port-forward-->  Service traffic-app:80 -> pod:8000
+k6 POD in-cluster (k8s/load/k6.yaml)  ->  Service traffic-app:80  ->  pod:8000
+   NOT via `kubectl port-forward`: that resolves the Service to ONE pod and pins
+   every request to it (measured 6.94 req/s on one pod, 0.00 on three others).
                                                                     |
   app/main.py exposes /metrics (http_requests_total)  <--------------+
                                                                     |
@@ -44,6 +46,17 @@ editing:
   calls it over a Prometheus window sized (`FETCH_STEPS`) to cover the longest lag. If those
   two ever build features differently, the model is silently asked a different question at
   serve time than it learned. Any new feature must be computable from the live window too.
+
+  TWO BUGS OF EXACTLY THIS KIND SHIPPED AND WERE CAUGHT BY RUNNING THE SYSTEM, NOT BY
+  READING IT. Both produced plausible forecasts (~45% too high) and raised nothing:
+    1. `live.py` fed raw Prometheus output to `build_table` without the 15s grid
+       reindex `load_series` applies, so every positional lag pointed at the wrong
+       instant. Fixed by extracting `features.to_grid()` and calling it from both.
+    2. Clock features were anchored to the input frame's first row — fixed in
+       training, sliding at inference — so `f_pos_in_cycle` was frozen at a constant
+       when serving. Fixed by anchoring to the Unix epoch.
+  The backtest cannot catch this class of bug: it only ever exercises the training
+  path. `predictor.py` against live Prometheus is the check that can.
 - **`models/forecaster.joblib` is a bundle, not a bare model**: `{model, features, horizon,
   quantile, backend, trained_rows}`. `predictor.py` and `controller.py` both
   `row.reindex(columns=bundle["features"])` before predicting — column *order* skew is a silent,
@@ -59,12 +72,16 @@ inside `src/`.
 
 ## Two numbers that must be MEASURED, never guessed
 
-- `C.HORIZON_STEPS` (src/config.py) — measured pod start-up time + the 30s controller
-  interval, in 15s steps. Currently `6` (90s), matching the app's `STARTUP_DELAY_S=15` plus
-  scheduling; re-measure and update if the deployment changes.
-- `CAPACITY_PER_POD` (env var read by `src/controller.py`, default 120 req/s) — measure by
-  scaling to 1 replica and raising k6 load until p95 degrades. A wrong value makes every
-  decision wrong in the same direction and is invisible in the forecast metrics.
+Both MEASURED on 2026-08-22. Re-measure if `WORK_MS`, `STARTUP_DELAY_S` or the CPU
+limit in `k8s/deployment.yaml` changes.
+
+- `C.HORIZON_STEPS = 4` (60s). Pod created -> Ready timed over three deletions: 19s,
+  19s, 18s. Plus the 30s controller interval, rounded up: `ceil(48.7/15) = 4`.
+- `CAPACITY_PER_POD = 20` req/s (`src/controller.py`, overridable by env). `make
+  capacity` steps the arrival rate against a single replica: p95 is flat at 95ms
+  through 20 req/s and jumps to 381ms at 24, with CPU pinned at the 400m limit
+  throughout. The old default of 120 would have provisioned 6x too few pods for
+  every forecast, and no forecast metric would have shown it.
 
 ## Commands
 
@@ -91,12 +108,17 @@ Local app without the cluster (1s warm-up instead of 15s, auto-reload):
 make run
 ```
 
-Load:
+Load — ALL of it runs in-cluster, never from the laptop (see the architecture note):
 
 ```bash
-k6 run load/steady.js    # 2-minute smoke, 5 VUs
-k6 run load/daily.js     # 60-min diurnal cycles, every 7th light — the training signal
+make load-start          # daily.js as a Deployment — the training signal
+make load-stop           # scale it to 0; REQUIRED before any benchmark run
+make capacity            # one pod's req/s; needs 1 replica and no HPA first
+make bench RUN=A1r SCRIPT=ramp.js    # one 20-min benchmark run
 ```
+
+`make load-start` rebuilds the ConfigMap from `load/` and does a rollout restart —
+editing a script without that leaves the old version running, silently.
 
 Forecasting pipeline (repo root, venv active):
 
@@ -106,7 +128,9 @@ python src/backtest.py                 # rolling-origin backtest -> outputs/resu
 python src/backtest.py --horizon 8     # try a different horizon without editing config
 python src/train_final.py              # retrain on ALL data -> models/forecaster.joblib
 python src/predictor.py                # dry run: prints forecasts, touches nothing
-CAPACITY_PER_POD=120 python src/controller.py   # the real thing: scales the deployment
+CAPACITY_PER_POD=20 python src/controller.py    # the real thing: scales the deployment
+python analyze.py                      # score the A/B -> results-r.md, comparison-r.png
+python analyze.py --suffix s           # same, for the step scenario
 ```
 
 `controller.py` also reads `DEPLOYMENT`, `NAMESPACE`, `INTERVAL_S`, `HEADROOM`, `MIN_PODS`,
@@ -116,17 +140,28 @@ There is no test suite and no linter configured. The backtest **is** the correct
 the forecasting side: read `outputs/results.csv` top-down, lowest **cost** wins. If a baseline
 beats the GBM, that is a real finding to report, not a bug to hide.
 
-## Success criteria
+## Results — MEASURED, 2026-08-24
 
-A/B benchmark, same k6 scenario both sides, **3 runs each**:
+Backtest, 4 folds, 12,277 rows: `gbm_q0.90` cost 4,295 vs naive 12,094 — **64.5% lower**.
+The mean-targeting GBM has half the MAE (2.24 vs 4.77) and costs 31% MORE, which is the
+clearest evidence in the project that the metric choice matters more than the model.
 
-| Arm         | What it does                          |
-|-------------|---------------------------------------|
-| Predictive  | controller.py scales from the forecast |
-| Baseline    | stock HPA, untouched                   |
+A/B benchmark, identical traffic, 3 runs per arm:
 
-Report **p99 latency** *and* **pod-seconds**. (`summaryTrendStats` in both k6 scripts already
-includes p99 — k6's default omits it.)
+| scenario | p99 baseline | p99 predictive | pod-seconds | verdict |
+|----------|--------------|----------------|-------------|---------|
+| ramp (20->80 req/s over 6 min) | 479 ms | **183 ms** | 3,053 -> 3,907 | **62% lower, +28% compute** |
+| step (instant 4x)              | 467 ms | 522 ms (1 run) | — | no advantage |
+
+The step result is the honest half: with no precursor there is nothing to forecast, both
+arms are blind for 30-60s, and pods take 19s regardless. The controller still provisioned
+CORRECTLY there (5 pods vs the HPA's 3) — arriving late with the right answer is the
+point being made.
+
+Both arms must provision to the SAME steady-state pod count or the benchmark compares
+generosity, not timing. That is why `k8s/deployment.yaml` sets `requests == limits ==
+400m` and `k8s/hpa.yaml` targets 90%: at 60% of a 200m request the HPA held ~7 pods where
+the controller held 3, and any latency win would have been explained by the extra capacity.
 
 ## Decisions already made (don't relitigate these)
 
@@ -170,42 +205,68 @@ includes p99 — k6's default omits it.)
 - The container is Python **3.11**, not 3.14, and only ever runs `app/` — the forecaster stays
   on the host. `.venv` is in `.dockerignore` for that reason.
 
-## Repo layout — state as of 2026-08-18
-
-Exists and works:
+## Repo layout — state as of 2026-08-24
 
 ```
 app/main.py            FastAPI app under test — deliberately CPU-bound and slow to start
 Dockerfile             python:3.11-slim image `traffic-app:v1`
 Makefile               every command above; ports defined once at the top
 requirements.txt       HOST pipeline deps (pinned) — separate from app/requirements.txt
-k8s/                   deployment.yaml, service.yaml, servicemonitor.yaml
-load/                  steady.js (smoke), daily.js (diurnal training signal)
 collect.py             Prometheus -> data/traffic.parquet
+analyze.py             scores the A/B -> results-*.md + outputs/comparison-*.png
+
+k8s/deployment.yaml    requests == limits == 400m (see Results for why)
+k8s/service.yaml       ClusterIP; the only way load reaches pods
+k8s/servicemonitor.yaml
+k8s/hpa.yaml           THE BASELINE ARM, at 90% — a manifest so it is reproducible
+k8s/load/k6.yaml               daily.js as a Deployment; scale 0/1 to stop/start
+k8s/load/k6-capacity.yaml      one-off Job, Step 25
+k8s/load/k6-benchmark.yaml     one Job per benchmark run
+                       k8s/load/ is a SUBDIRECTORY on purpose: `kubectl apply -f k8s/`
+                       is not recursive, so `make deploy` cannot start a load test.
+
+load/daily.js          60-min diurnal cycles — the training signal
+load/ramp.js           BENCHMARK: 20->80 req/s over 6 min. The predictable event.
+load/benchmark.js      BENCHMARK: instant 4x step. The unpredictable one.
+load/capacity.js       stepped arrival rate to find one pod's knee
+load/steady.js         2-min smoke, superseded
+
 src/config.py          every constant
-src/features.py        lags, rolling stats, clock features of t+H
+src/features.py        to_grid() + build_table() — SHARED by training and inference
 src/models.py          baseline ladder + LightGBM/sklearn GBM + replicas_needed()
 src/evaluate.py        rolling-origin folds, cost metric, under/over split
 src/backtest.py        the evaluation run
 src/train_final.py     retrain on everything -> models/forecaster.joblib
-src/live.py            Prometheus -> one inference-shaped feature row
-src/predictor.py       dry-run forecaster
+src/live.py            Prometheus -> one inference-shaped feature row (+ freshness guard)
+src/predictor.py       dry-run forecaster — the ONLY check for train/serve skew
 src/controller.py      the predictive autoscaler
+
+data/traffic.parquet   12,281 rows, 51h, 100% coverage. NOT gitignored: Prometheus
+                       keeps 15 days, so this is the one unreproducible artefact.
+bench/*.json           six benchmark runs + their start/end epochs
+bench/discarded/       runs thrown out, with README.md saying why
 ```
 
-Does not exist yet — these are the remaining steps, one at a time:
+Remaining: the screen recording (README has a TODO placeholder) and resume bullets.
 
-```
-k8s/hpa.yaml           the BASELINE arm. Without it there is no A/B, only an A.
-bench/                 k6 scenario + results for the 3-runs-each benchmark
-data/traffic.parquet   EMPTY. Nothing downstream of collect.py can run until
-                       daily.js has been left running for several cycles.
-models/, outputs/, logs/   created on first use by train_final / backtest / controller
-```
+**Every number in this file has been measured on this machine.** Do not add one that
+has not. If you change `WORK_MS`, `STARTUP_DELAY_S`, the CPU limit, or `PEAK_RPS`, the
+horizon and capacity figures are void until re-measured.
 
-**Do not claim a backtest number, a horizon, or a capacity figure that has not actually been
-run on this machine.** `data/` is empty today, which means every number in this file marked
-"measure this" is still unmeasured.
+### Operational traps, all of them hit at least once
+
+- **`kubectl port-forward svc/X` pins to ONE pod.** It also dies when that pod dies.
+- **macOS Control Center holds port 5000** (AirPlay). When a forward drops, k6 gets
+  instant 403s instead of connection errors — it looks healthy while delivering nothing.
+- **kube-proxy balances per TCP connection**, so k6 needs `noConnectionReuse: true` or
+  one VU's keep-alive socket pins all traffic to one pod.
+- **Closing the laptop lid sleeps the Mac even on AC** ("Clamshell Sleep"). It freezes
+  the cluster mid-run; `caffeinate` does not prevent it.
+- **Readiness probes must detect DEAD, not BUSY.** At the default 1s timeout a saturated
+  pod fails its probe, leaves the Service, dumps its load on the survivors, and the
+  deployment cascades to zero available replicas.
+- **A benchmark run with `dropped_iterations > 0` is invalid** — k6 quietly reduced the
+  offered load exactly when the app was struggling.
 
 ## How we work — follow these strictly
 
