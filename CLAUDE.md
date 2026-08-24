@@ -247,7 +247,8 @@ bench/*.json           six benchmark runs + their start/end epochs
 bench/discarded/       runs thrown out, with README.md saying why
 ```
 
-Remaining: the screen recording (README has a TODO placeholder) and resume bullets.
+Nothing outstanding. A screen recording was considered and deliberately skipped — the
+chart carries the same evidence.
 
 **Every number in this file has been measured on this machine.** Do not add one that
 has not. If you change `WORK_MS`, `STARTUP_DELAY_S`, the CPU limit, or `PEAK_RPS`, the

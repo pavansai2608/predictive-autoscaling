@@ -5,10 +5,9 @@ the traffic arrives — then measure whether it actually helps, against stock HP
 under identical load.
 
 **Result: p99 latency 62% lower than Kubernetes' built-in autoscaler, for 28% more
-pod-seconds.** Three runs per arm. On a load ramp the model can anticipate; on an
-instantaneous spike it cannot, it ties. Both numbers are below.
-
-<!-- TODO: add the screen recording here -->
+pod-seconds** — three runs per arm, identical traffic. That is on a load ramp the model
+can anticipate. On an instantaneous spike it cannot, and it ties. Both results are below;
+the second one is the more interesting of the two.
 
 ![Predictive vs reactive autoscaling](outputs/comparison-r.png)
 
