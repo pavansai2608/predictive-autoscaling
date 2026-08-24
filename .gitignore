@@ -25,3 +25,7 @@ logs/
 # NOT ignored: data/traffic.parquet. It is small (a few hundred KB) and it is
 # the one artefact here that CANNOT be regenerated — Prometheus keeps only 15
 # days, so once a scrape ages out, that history is gone for good.
+
+# Editor and agent state — local to one machine, not part of the project.
+.agents/
+.claude/

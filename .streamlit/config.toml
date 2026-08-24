@@ -1,0 +1,12 @@
+# Skips the one-time "enter your email" prompt on first run, which otherwise
+# blocks `make ui` waiting for input that has nothing to do with this project.
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = false     # still opens your browser automatically
+
+[theme]
+# Matches outputs/comparison-r.png so the dashboard and the report agree:
+# blue is the predictive arm, orange the baseline.
+primaryColor = "#2a78d6"

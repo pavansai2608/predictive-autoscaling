@@ -2,6 +2,14 @@
 APP_PORT  = 5000
 PROM_PORT = 9090
 
+# Use the venv's interpreters when they exist, otherwise whatever is on PATH.
+# Without this, every target here fails with "No such file or directory" unless
+# you remembered to `source .venv/bin/activate` first — which is a bad way to
+# find out your dashboard is fine and your shell was not.
+VENV      ?= .venv
+PY        := $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python)
+STREAMLIT := $(shell [ -x $(VENV)/bin/streamlit ] && echo $(VENV)/bin/streamlit || echo streamlit)
+
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
 .PHONY: run build load deploy pods forward-app forward-prom \
@@ -69,7 +77,7 @@ capacity:
 # 6h lookback means running LESS often than every 6 hours loses history
 # permanently; every 10 minutes just means a crash costs at most 10 minutes.
 collect:
-	while true; do python collect.py; sleep 600; done
+	while true; do $(PY) collect.py; sleep 600; done
 
 # --- the A/B benchmark -------------------------------------------------------
 # One 20-minute run:   make bench RUN=A1
@@ -110,9 +118,9 @@ bench:
 # traffic running, and is the view that shows a forecast beside what actually
 # happened next — the only check that catches train/serve skew.
 ui:
-	streamlit run dashboard.py
+	$(STREAMLIT) run dashboard.py
 
 # Re-freeze the benchmark runs out of Prometheus. Only needed after new runs;
 # Prometheus keeps 15 days, this file keeps them forever.
 replay-data:
-	python export_replay.py
+	$(PY) export_replay.py

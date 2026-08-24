@@ -154,6 +154,27 @@ make bench RUN=B1r SCRIPT=ramp.js    # ... B2r, B3r
 python analyze.py                    # → results-r.md, outputs/comparison-r.png
 ```
 
+## The dashboard
+
+```bash
+make ui        # http://localhost:8501
+```
+
+Two pages. **Benchmark replay** steps through a recorded 20-minute run with both
+policies side by side — pod counts, arriving traffic, response times, and the
+controller's own forecasts at each moment. It reads `bench/replay.json`, frozen out
+of Prometheus by `export_replay.py`, so it needs no cluster and keeps working after
+Prometheus' 15-day retention has discarded the runs.
+
+**Live forecast** loads the trained model and reads Prometheus directly: current
+rate, what the model expects 60 s ahead, and the pod count that implies. When the
+recent window has gaps it shows a *hold* rather than a number — that is `live.py`
+declining to answer on broken input, and it is the view that would have surfaced the
+train/serve bugs described below far earlier.
+
+Streamlit rather than a JS framework because the live page calls `live.fetch_recent()`
+and the model directly; a separate frontend would need an API written first.
+
 ## Limitations
 
 **The traffic is synthetic.** A scripted diurnal cycle with random spikes, not a
