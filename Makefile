@@ -5,7 +5,7 @@ PROM_PORT = 9090
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
 .PHONY: run build load deploy pods forward-app forward-prom \
-        load-start load-stop capacity collect bench
+        load-start load-stop capacity collect bench ui
 
 # Local dev loop: 1s warm-up instead of 15s, and restart on every save.
 run:
@@ -103,3 +103,16 @@ bench:
 	  | sed '1d;$$d' > bench/$(RUN).json
 	@date -u +%s > bench/$(RUN).end
 	@echo "wrote bench/$(RUN).json  (window $(RUN).start -> $(RUN).end)"
+
+# --- the UI ------------------------------------------------------------------
+# Two pages. "Benchmark replay" needs nothing but bench/replay.json, so it works
+# with the cluster switched off. "Live forecast" needs `make forward-prom` and
+# traffic running, and is the view that shows a forecast beside what actually
+# happened next — the only check that catches train/serve skew.
+ui:
+	streamlit run dashboard.py
+
+# Re-freeze the benchmark runs out of Prometheus. Only needed after new runs;
+# Prometheus keeps 15 days, this file keeps them forever.
+replay-data:
+	python export_replay.py

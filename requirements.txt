@@ -33,6 +33,14 @@ joblib==1.5.3
 # --- output ------------------------------------------------------------------
 matplotlib==3.11.1     # backtest.py writes outputs/forecast.png via the Agg backend
 
+# --- the UI ------------------------------------------------------------------
+# dashboard.py. Streamlit rather than a JS framework because this repo is Python
+# end to end: the live page imports src/live.py and the trained model directly,
+# which a separate frontend could only reach through an API written first.
+# altair ships with streamlit but is pinned here because dashboard.py imports it.
+streamlit==1.62.0
+altair==6.2.2
+
 # --- the hands ---------------------------------------------------------------
 # controller.py patches deployment scale. Loaded from ~/.kube/config because
 # this runs on the laptop, not inside a pod.
