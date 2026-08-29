@@ -85,13 +85,19 @@ limit in `k8s/deployment.yaml` changes.
 
 ## Commands
 
-Two port-forwards are the prerequisite for everything live — collect.py, live.py, predictor.py
-and the k6 scripts all hardcode `localhost:9090` (Prometheus) and `localhost:5000` (app):
+ONE port-forward is the prerequisite for everything live. collect.py, live.py,
+predictor.py, analyze.py, export_replay.py and dashboard.py all hardcode
+`localhost:9090`:
 
 ```bash
-make forward-app       # svc/traffic-app 5000:80
 make forward-prom      # monitoring-kube-prometheus-prometheus 9090:9090
 ```
+
+There is deliberately no `forward-app`. `kubectl port-forward svc/...` pins every
+request to a single pod, so laptop-side load can never demonstrate a benefit from
+scaling; k6 runs in-cluster and reaches the Service directly. Nothing on the Mac
+needs the app's port. `make run` (local dev, no cluster) uses 8000 rather than 5000
+because macOS Control Center holds 5000 for AirPlay.
 
 Cluster loop (kind cluster is named `autoscale`; `imagePullPolicy: Never` means the image must
 be side-loaded, there is no registry):

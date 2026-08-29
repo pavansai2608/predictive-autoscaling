@@ -118,8 +118,9 @@ policies rather than instead of them.
 ## Reproducing
 
 Prerequisites: Docker, `kind`, `kubectl`, `helm`, `k6`, and a Python venv from
-`requirements.txt`. Two port-forwards are assumed throughout (`make forward-app`,
-`make forward-prom`).
+`requirements.txt`. `make forward-prom` is assumed wherever Prometheus is read. The
+app itself needs no port-forward: k6 runs inside the cluster and reaches the Service
+directly.
 
 ```bash
 # 1. cluster + app

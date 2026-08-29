@@ -1,5 +1,9 @@
 # Ports live here and nowhere else, so changing one is a single edit.
-APP_PORT  = 5000
+# 8000, not 5000: macOS Control Center holds 5000 for AirPlay Receiver, and when
+# something else is listening there a failed connection comes back as an instant
+# 403 rather than an error — which once let k6 report 12.5M healthy iterations
+# while delivering nothing at all. 8000 also matches the container's port.
+APP_PORT  = 8000
 PROM_PORT = 9090
 
 # Use the venv's interpreters when they exist, otherwise whatever is on PATH.
@@ -12,7 +16,7 @@ STREAMLIT := $(shell [ -x $(VENV)/bin/streamlit ] && echo $(VENV)/bin/streamlit 
 
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
-.PHONY: run build load deploy pods forward-app forward-prom \
+.PHONY: run build load deploy pods forward-prom \
         load-start load-stop capacity collect bench ui
 
 # Local dev loop: 1s warm-up instead of 15s, and restart on every save.
@@ -37,9 +41,11 @@ deploy:
 pods:
 	kubectl get pods -w
 
-# Reach the app from the Mac at localhost:$(APP_PORT).
-forward-app:
-	kubectl port-forward svc/traffic-app $(APP_PORT):80
+# There is deliberately NO forward-app target. `kubectl port-forward svc/...`
+# resolves the Service to ONE pod and pins every request to it, so laptop-side
+# load could never show a benefit from scaling. k6 runs in-cluster instead
+# (k8s/load/k6.yaml) and reaches the app directly, so nothing on the Mac needs
+# port 5000 or 8000 at all.
 
 # Reach the Prometheus UI at localhost:$(PROM_PORT).
 forward-prom:
