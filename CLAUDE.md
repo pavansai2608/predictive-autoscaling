@@ -229,7 +229,6 @@ load/daily.js          60-min diurnal cycles — the training signal
 load/ramp.js           BENCHMARK: 20->80 req/s over 6 min. The predictable event.
 load/benchmark.js      BENCHMARK: instant 4x step. The unpredictable one.
 load/capacity.js       stepped arrival rate to find one pod's knee
-load/steady.js         2-min smoke, superseded
 
 src/config.py          every constant
 src/features.py        to_grid() + build_table() — SHARED by training and inference
