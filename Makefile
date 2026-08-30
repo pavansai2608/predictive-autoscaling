@@ -127,9 +127,13 @@ ui:
 	$(STREAMLIT) run dashboard.py
 
 # Re-freeze the benchmark runs out of Prometheus. Only needed after new runs;
-# Prometheus keeps 15 days, this file keeps them forever.
+# Prometheus keeps 15 days, these files keep them forever. Both scenarios, so a
+# run added to one of them cannot be silently left out of the UI.
 replay-data:
 	$(PY) export_replay.py
+	$(PY) export_replay.py --runs A1,A2,A3,B1,B2,B3,C1,C2,C3 \
+	  --out replay-step.json \
+	  --scenario "instant 4x step: 20 -> 80 req/s at minute 5, held 4 min"
 
 # --- keeping the model current -----------------------------------------------
 # Scores a freshly-trained candidate against the live model on data collected

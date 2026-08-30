@@ -1,7 +1,7 @@
 """Score the A/B benchmark.
 
-    python analyze.py            # the ramp scenario (the headline result)
-    python analyze.py --suffix s # the step scenario
+    python analyze.py                        # the ramp scenario (two arms)
+    python analyze.py --suffix '' --event 5,9  # the step scenario (three arms)
 
 Reads the k6 summaries in bench/, replays each run's window against Prometheus
 for the replica count, and writes results.md plus outputs/comparison.png.
@@ -33,6 +33,7 @@ STEP = 20  # seconds between samples when replaying a window
 
 C_A = "#eb6834"   # baseline / HPA
 C_B = "#2a78d6"   # predictive
+C_C = "#1f9d55"   # predictive + HPA floor — the composition, not a third model
 
 
 def prom_range(query: str, start: int, end: int, step: int = STEP):
@@ -100,14 +101,21 @@ def mean_series(runs: list[dict], tkey: str, ykey: str):
 
 
 def main(suffix: str, event: tuple[int, int]):
+    # Three arms, but only the first two are required. MODE=hpa-floor was run on
+    # the step scenario only, so C1..C3 exist for suffix '' and not for 'r'. A
+    # missing third arm is dropped rather than fatal — otherwise adding this arm
+    # would have broken `analyze.py` for the ramp, which has no C runs and never
+    # will.
     arms = {
         "Baseline (HPA)": [load_run(f"A{i}{suffix}") for i in (1, 2, 3)],
         "Predictive": [load_run(f"B{i}{suffix}") for i in (1, 2, 3)],
+        "Predictive + HPA floor": [load_run(f"C{i}{suffix}") for i in (1, 2, 3)],
     }
     arms = {k: [r for r in v if r] for k, v in arms.items()}
-    for k, v in arms.items():
-        if not v:
+    for k in ("Baseline (HPA)", "Predictive"):
+        if not arms[k]:
             raise SystemExit(f"no runs found for {k} with suffix '{suffix}'")
+    arms = {k: v for k, v in arms.items() if v}
 
     # ---- table --------------------------------------------------------------
     lines = ["| arm | runs | p50 | p95 | **p99** | max | pod-seconds | failed |",
@@ -121,12 +129,16 @@ def main(suffix: str, event: tuple[int, int]):
             f"**{f('p99'):.0f} ms** | {f('max'):.0f} ms | {f('pod_seconds'):.0f} | "
             f"{f('failed'):.2f}% |")
 
-    a, b = summary["Baseline (HPA)"], summary["Predictive"]
-    lat = (1 - b["p99"] / a["p99"]) * 100
-    cost = (b["pods"] / a["pods"] - 1) * 100
-    head = (f"p99 latency: baseline {a['p99']:.0f} ms -> predictive {b['p99']:.0f} ms "
-            f"({lat:.0f}% lower). Pod-seconds: {a['pods']:.0f} -> {b['pods']:.0f} "
-            f"({cost:+.0f}%).")
+    # Every arm is scored against the baseline, not against the one before it:
+    # "49% better than the HPA" is the claim a reader can check, and chaining
+    # improvements arm-to-arm would let a bad middle arm flatter the last one.
+    base = summary["Baseline (HPA)"]
+    head = "\n\n".join(
+        f"{arm}: p99 {base['p99']:.0f} ms -> {s['p99']:.0f} ms "
+        f"({(1 - s['p99'] / base['p99']) * 100:.0f}% lower). "
+        f"Pod-seconds: {base['pods']:.0f} -> {s['pods']:.0f} "
+        f"({(s['pods'] / base['pods'] - 1) * 100:+.0f}%)."
+        for arm, s in summary.items() if arm != "Baseline (HPA)")
 
     per_run = ["", "Individual runs:", "",
                "| run | p99 | pod-seconds | dropped |", "|---|---|---|---|"]
@@ -144,7 +156,7 @@ def main(suffix: str, event: tuple[int, int]):
     # ---- chart --------------------------------------------------------------
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7), sharex=True,
                                    gridspec_kw={"height_ratios": [2, 1]})
-    for (arm, runs), c in zip(arms.items(), (C_A, C_B)):
+    for (arm, runs), c in zip(arms.items(), (C_A, C_B, C_C)):
         t, y = mean_series(runs, "t_lat", "p99_series")
         if t.size:
             ax1.plot(t / 60, y * 1000, color=c, lw=1.8, label=arm)
@@ -164,7 +176,7 @@ def main(suffix: str, event: tuple[int, int]):
     ax1.set_ylabel("p99 latency (ms)")
     ax1.set_title(f"Predictive vs reactive autoscaling — mean of "
                   f"{min(len(v) for v in arms.values())} runs per arm", fontsize=12)
-    ax1.legend(frameon=False, ncols=2)
+    ax1.legend(frameon=False, ncols=len(arms))
     ax2.set_ylabel("pods ready")
     ax2.set_xlabel("minutes into run")
     fig.tight_layout()

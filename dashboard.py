@@ -3,9 +3,10 @@
     pip install -r requirements.txt
     streamlit run dashboard.py
 
-REPLAY reads bench/replay.json — the six benchmark runs frozen out of Prometheus
-by export_replay.py. It needs no cluster and works forever, which matters because
-Prometheus keeps only 15 days.
+REPLAY reads bench/replay.json (the ramp) and bench/replay-step.json (the instant
+spike) — benchmark runs frozen out of Prometheus by export_replay.py. It needs no
+cluster and works forever, which matters because Prometheus keeps only 15 days.
+A scenario whose file is absent is simply not offered.
 
 LIVE reads Prometheus and the trained model directly. It needs `make forward-prom`
 running, and it is the view that would have caught the two train/serve bugs
@@ -32,10 +33,57 @@ sys.path.insert(0, str(ROOT / "src"))
 # Amber = reactive, cyan = predictive, everywhere. Matches
 # chartCategoricalColors in .streamlit/config.toml so Altair, the metric rails
 # and the pod blocks all agree without any of them being told twice.
-BASE = "#f0873f"      # baseline / HPA
-PRED = "#3fa9f5"      # predictive
-DIM  = "#8b95a6"
+BASE  = "#f0873f"     # baseline / HPA
+PRED  = "#3fa9f5"     # predictive owns the replica count
+FLOOR = "#4ad991"     # predictive raises the HPA's floor — the composition
+DIM   = "#8b95a6"
 RUN_SECONDS = 1200    # every benchmark run is 20 minutes
+
+# A run's name prefix is the ONLY record of which arm it was: `make bench RUN=C1`
+# writes bench/C1.json and nothing in it says MODE=hpa-floor. This table is the
+# decoder, and it has a twin in export_replay.ARM_OF_PREFIX — change both.
+ARMS = {
+    "A": ("Baseline", BASE, "reacts to cpu"),
+    "B": ("Predictive", PRED, "owns the replica count"),
+    "C": ("Predictive + floor", FLOOR, "raises the hpa's minimum"),
+}
+
+# Phase boundaries are read off the k6 stage lists in load/ramp.js and
+# load/benchmark.js — not eyeballed from the charts. If a stage duration
+# changes there, these are wrong and the narration lies about the run.
+SCENARIOS = {
+    "Gradual ramp": {
+        "file": "replay.json",
+        "title": "Watch the pods arrive early",
+        "sub": "The same traffic, sent twice. Kubernetes' built-in autoscaler reacts to "
+               "CPU that has already risen. The forecast scales ahead of it. Every figure "
+               "below was recorded during a real run.",
+        "phases": [
+            (240, "Steady traffic. Every arm sits at the 2-pod minimum."),
+            (600, "**The ramp.** Traffic climbs 20 → 80 req/s over six minutes. Watch the "
+                  "forecasting arms add pods while it is still rising."),
+            (840, "**The plateau.** Traffic is at its peak. The baseline finally reaches "
+                  "3 pods — but its response times already climbed."),
+            (RUN_SECONDS + 1, "Winding down. Every arm releases pods."),
+        ],
+    },
+    "Instant spike": {
+        "file": "replay-step.json",
+        "title": "The spike nothing could see coming",
+        "sub": "A 4x step in one second, with no precursor in the traffic. There is nothing "
+               "here for a forecaster to predict — so this page is the honest half of the "
+               "project. It shows where forecasting alone LOSES, and what fixed it.",
+        "phases": [
+            (300, "Steady at 20 req/s. Nothing in this traffic hints at what is coming."),
+            (540, "**The step.** 20 → 80 req/s instantly. No arm had warning; what "
+                  "separates them now is only how fast capacity arrives."),
+            (RUN_SECONDS + 1, "**Recovery.** Traffic is back to 20/s. This is where the "
+                  "forecast-only arm lost: it withdrew pods while the spike was still "
+                  "running. The floor arm cannot — lowering a floor only permits the HPA "
+                  "to shrink, and the HPA declines while CPU is high."),
+        ],
+    },
+}
 
 st.set_page_config(page_title="Predictive Autoscaling", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
@@ -196,9 +244,35 @@ def pod_gauge(n: int, colour: str, slots: int = 8) -> str:
 
 # ---------------------------------------------------------------- data
 @st.cache_data
-def load_replay() -> dict | None:
-    p = ROOT / "bench/replay.json"
+def load_replay(filename: str) -> dict | None:
+    p = ROOT / "bench" / filename
     return json.loads(p.read_text()) if p.exists() else None
+
+
+def group_runs(data: dict) -> dict[str, dict[str, dict]]:
+    """{run number: {arm prefix: run}} — runs pair up by the digit in their name.
+
+    A1/B1/C1 are the same traffic sent three times, so they belong side by side;
+    A1 vs B2 would compare two different 20-minute windows.
+    """
+    out: dict[str, dict[str, dict]] = {}
+    for r in data["runs"]:
+        out.setdefault(r["name"][1], {})[r["name"][0]] = r
+    return dict(sorted(out.items()))
+
+
+def arm_means(data: dict) -> dict[str, dict[str, float]]:
+    """Mean p99 and pod-seconds per arm — the same mean analyze.py prints.
+
+    Averaged here rather than hardcoded so the headline follows the data when a
+    scenario is switched. Three stale numbers in the masthead would be worse
+    than none, and this file used to carry exactly that.
+    """
+    acc: dict[str, list[dict]] = {}
+    for r in data["runs"]:
+        acc.setdefault(r["name"][0], []).append(r["summary"])
+    return {p: {k: sum(s[k] for s in v) / len(v) for k in ("p99", "pod_seconds")}
+            for p, v in acc.items()}
 
 
 def series(run: dict, key: str) -> pd.DataFrame:
@@ -227,64 +301,73 @@ def decision_at(run: dict, t: int):
 
 # ---------------------------------------------------------------- replay page
 def page_replay():
-    data = load_replay()
-    if not data:
-        st.error("bench/replay.json not found. Run `python export_replay.py` first "
+    available = [n for n, s in SCENARIOS.items()
+                 if (ROOT / "bench" / s["file"]).exists()]
+    if not available:
+        st.error("No replay file found in bench/. Run `make replay-data` first "
                  "(it needs `make forward-prom` running).")
         return
 
-    runs = {r["name"]: r for r in data["runs"]}
-    pairs = [("A1r", "B1r"), ("A2r", "B2r"), ("A3r", "B3r")]
+    top = st.columns([2, 1, 3])
+    with top[0]:
+        scen_name = st.radio("Scenario", available, horizontal=True)
+    scen = SCENARIOS[scen_name]
+    data = load_replay(scen["file"])
+    grouped = group_runs(data)
+    means = arm_means(data)
+
+    # ---- masthead: every figure below is a mean over that arm's runs --------
+    figs = "".join(
+        f'<div class="fig" style="border-left-color:{ARMS[p][1]}">'
+        f'<b style="color:{ARMS[p][1]}">{means[p]["p99"]:.0f} ms</b>'
+        f'<span>{ARMS[p][0].upper()} &mdash; SLOWEST 1%</span></div>'
+        for p in ARMS if p in means)
+    # The winner is whichever non-baseline arm has the lowest p99 — picked from
+    # the data, not asserted. On the step scenario that is the floor arm; on the
+    # ramp there is only one candidate.
+    rivals = [p for p in means if p != "A"]
+    if rivals and "A" in means:
+        best = min(rivals, key=lambda p: means[p]["p99"])
+        lat = (1 - means[best]["p99"] / means["A"]["p99"]) * 100
+        cost = (means[best]["pod_seconds"] / means["A"]["pod_seconds"] - 1) * 100
+        figs += (f'<div class="fig"><b>{lat:.0f}%</b><span>FASTER &mdash; BEST ARM</span></div>'
+                 f'<div class="fig"><b>{cost:+.0f}%</b><span>COMPUTE</span></div>')
 
     st.html(f"""
 <div class="masthead">
-  <span class="eyebrow">Recorded benchmark &middot; 20 minutes &middot; 3 runs per arm</span>
-  <h1>Watch the pods arrive early</h1>
-  <p class="sub">The same traffic, sent twice. Kubernetes' built-in autoscaler reacts to
-  CPU that has already risen. The forecast scales ahead of it. Every figure below was
-  recorded during a real run.</p>
-  <div class="headline">
-    <div class="fig amber"><b>479 ms</b><span>REACTIVE &mdash; SLOWEST 1%</span></div>
-    <div class="fig cyan"><b>183 ms</b><span>PREDICTIVE &mdash; SLOWEST 1%</span></div>
-    <div class="fig"><b>62%</b><span>FASTER</span></div>
-    <div class="fig"><b>+28%</b><span>COMPUTE</span></div>
-  </div>
+  <span class="eyebrow">Recorded benchmark &middot; 20 minutes &middot;
+    {len(grouped)} runs per arm &middot; {data["scenario"]}</span>
+  <h1>{scen["title"]}</h1>
+  <p class="sub">{scen["sub"]}</p>
+  <div class="headline">{figs}</div>
 </div>""")
 
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        which = st.selectbox("Which run", [1, 2, 3], format_func=lambda i: f"Run {i}")
-    a, b = (runs.get(n) for n in pairs[which - 1])
-    if not (a and b):
-        st.error("That run is missing from replay.json.")
-        return
+    with top[1]:
+        which = st.selectbox("Which run", list(grouped),
+                             format_func=lambda i: f"Run {i}")
+    arms = grouped[which]
 
-    with c2:
-        t = st.slider("Minute of the run", 0, RUN_SECONDS, 0, step=20,
-                      format="%d s", label_visibility="visible")
+    # No key= on the slider: with a key, Streamlit restores the widget from its
+    # own stored state and ignores `value` on every rerun, so Play could never
+    # move it. Keyless + explicit value means the playhead is ours to set.
+    with top[2]:
+        t = st.slider("Minute of the run", 0, RUN_SECONDS,
+                      value=st.session_state.get("t", 0), step=20, format="%d s")
+    st.session_state["t"] = t
 
-    # Play steps the slider forward by re-running the script. Streamlit has no
-    # animation loop, so this is the honest way to do it — and the slider stays
-    # draggable, which matters more than smoothness for reading the numbers.
-    if st.button("▶ Play from here", disabled=t >= RUN_SECONDS):
-        for nxt in range(t, RUN_SECONDS + 1, 20):
-            st.session_state["t"] = nxt
-            time.sleep(0.05)
-        st.rerun()
+    # Streamlit has no animation loop, so playing means: draw one frame, sleep,
+    # advance, rerun. The advance happens at the BOTTOM of this function, after
+    # the charts exist — stepping here would redraw the old frame first.
+    playing = st.toggle("▶ Play", value=False, disabled=t >= RUN_SECONDS)
 
-    phase = ("Steady traffic. Both sit at the 2-pod minimum." if t < 240 else
-             "**The ramp.** Traffic climbs 20 → 80 req/s. Watch the right side add pods "
-             "while it is still rising." if t < 600 else
-             "**The plateau.** Traffic is at its peak. The baseline finally reaches 3 pods — "
-             "but its response times already climbed." if t < 840 else
-             "Winding down. Both release pods.")
+    phase = next(text for until, text in scen["phases"] if t < until)
     st.info(f"**Minute {t // 60}:{t % 60:02d}** — {phase}")
 
-    left, right = st.columns(2)
-    for col, run, name, colour in ((left, a, "Baseline", BASE),
-                                   (right, b, "Predictive", PRED)):
+    present = [p for p in ARMS if p in arms]
+    for col, prefix in zip(st.columns(len(present)), present):
+        run = arms[prefix]
+        name, colour, kind = ARMS[prefix]
         with col:
-            kind = "reacts to cpu" if colour == BASE else "scales on forecast"
             st.html(f'<div class="armhead" style="--rail:{colour}">'
                     f'<b>{name}</b><span>{kind}</span></div>')
             rate = value_at(run, "rate", t) or 0
@@ -298,23 +381,34 @@ def page_replay():
 
             d = decision_at(run, t)
             if d:
+                # The two forecasting arms act through different levers, and the
+                # caption has to say which — "adding a pod" would be a lie in
+                # floor mode, where the controller only ever moves minReplicas
+                # and the HPA decides whether a pod actually appears.
+                act = {"scale_up": "  ·  **adding a pod now**",
+                       "floor_up": "  ·  **raising the hpa's floor now**",
+                       }.get(d["action"], "")
                 st.caption(f"Model: traffic now **{d['now']:.0f}/s**, expects "
                            f"**{d['pred']:.0f}/s** in 60 s → wants **{d['pods_target']} pods**"
-                           + ("  ·  **adding a pod now**" if d["action"] == "scale_up" else ""))
+                           + act)
             elif run["arm"] == "baseline":
                 st.caption("No forecast — this version only reacts to what already happened.")
 
     # ---- charts, drawn only up to the playhead so the run unfolds -----------
     st.divider()
     frames = []
-    for run, label in ((a, "Baseline"), (b, "Predictive")):
+    for prefix in present:
         for key in ("p99", "pods", "rate"):
-            df = series(run, key)
+            df = series(arms[prefix], key)
             df = df[df.t <= t].rename(columns={key: "value"})
-            df["metric"], df["arm"] = key, label
+            df["metric"], df["arm"] = key, ARMS[prefix][0]
             frames.append(df)
     long = pd.concat(frames, ignore_index=True)
-    scale = alt.Scale(domain=["Baseline", "Predictive"], range=[BASE, PRED])
+    # The scale is passed explicitly rather than left to Altair's default order:
+    # an arm must keep its colour when a scenario has two arms instead of three,
+    # or the reader relearns the legend every time they switch pages.
+    scale = alt.Scale(domain=[ARMS[p][0] for p in present],
+                      range=[ARMS[p][1] for p in present])
 
     titles = {"p99": "Response time of the slowest 1% (ms)",
               "pods": "Pods running",
@@ -338,23 +432,42 @@ def page_replay():
     # ---- verdict ------------------------------------------------------------
     st.divider()
     st.subheader("What this run measured")
-    sa, sb = a["summary"], b["summary"]
     st.dataframe(pd.DataFrame([
-        {"Version": "Baseline (HPA)", "Slowest 1%": f"{sa['p99']} ms",
-         "Typical": f"{sa['p50']} ms", "Computing used": f"{sa['pod_seconds']:,} pod-s"},
-        {"Version": "Predictive", "Slowest 1%": f"{sb['p99']} ms",
-         "Typical": f"{sb['p50']} ms", "Computing used": f"{sb['pod_seconds']:,} pod-s"},
-    ]), hide_index=True, use_container_width=True)
+        {"Version": ARMS[p][0],
+         "Slowest 1%": f"{arms[p]['summary']['p99']} ms",
+         "Typical": f"{arms[p]['summary']['p50']} ms",
+         "Computing used": f"{arms[p]['summary']['pod_seconds']:,} pod-s"}
+        for p in present]), hide_index=True, use_container_width=True)
 
-    lat = (1 - sb["p99"] / sa["p99"]) * 100
-    cost = (sb["pod_seconds"] / sa["pod_seconds"] - 1) * 100
-    st.markdown(
-        f"The slowest 1% of responses were **{lat:.0f}% faster** with the forecast "
-        f"({sa['p99']} ms → {sb['p99']} ms), using **{cost:+.0f}% computing**. "
-        "Both numbers matter — being faster by running unlimited servers is not an improvement.")
-    st.caption("Averaged over three runs per version: 479 ms vs 183 ms. On a spike that "
-               "arrives instantly with no warning, the forecast shows no advantage — there "
-               "is nothing to predict from.")
+    # Pod-seconds sits in the same sentence as latency, never in a footnote: a
+    # latency win bought with unlimited compute is not a win, and hiding the
+    # cost side is the easiest way to make a benchmark dishonest.
+    sa = arms["A"]["summary"] if "A" in arms else None
+    if sa:
+        for p in present:
+            if p == "A":
+                continue
+            s = arms[p]["summary"]
+            lat = (1 - s["p99"] / sa["p99"]) * 100
+            cost = (s["pod_seconds"] / sa["pod_seconds"] - 1) * 100
+            st.markdown(
+                f"**{ARMS[p][0]}** — the slowest 1% of responses were "
+                f"**{lat:.0f}% faster** than the baseline "
+                f"({sa['p99']} ms → {s['p99']} ms), using **{cost:+.0f}% computing**.")
+
+    st.caption(
+        "Figures above are this single run; the masthead averages all "
+        f"{len(grouped)} runs per arm. A negative 'faster' is a real result, "
+        "reported rather than dropped.")
+
+    # One frame per rerun, advanced only once the whole page above has drawn.
+    # The sleep is what makes it watchable rather than a flicker; the slider
+    # stays draggable throughout, which matters more than smoothness because
+    # the point is reading the numbers at a chosen instant.
+    if playing and t < RUN_SECONDS:
+        time.sleep(0.4)
+        st.session_state["t"] = min(RUN_SECONDS, t + 20)
+        st.rerun()
 
 
 # ---------------------------------------------------------------- live page
@@ -498,8 +611,11 @@ st.sidebar.html("""
 <div style="font-size:.82rem;color:#9aa5b5;line-height:1.55">
 Forecast the request rate 60&nbsp;s ahead and add pods <i>before</i> the traffic arrives.
 On a gradual ramp that cuts the slowest 1% of responses by
-<b style="color:#3fa9f5">62%</b> for <b>28%</b> more compute. On a spike with no warning
-it does not help &mdash; and that is reported too.
+<b style="color:#3fa9f5">62%</b> for <b>28%</b> more compute.<br><br>
+On an instant spike the forecast alone is <b>worse</b> than the HPA &mdash; it withdraws
+capacity while the spike is still running. Letting it raise the HPA's <i>floor</i> instead
+of owning the replica count fixes that: <b style="color:#4ad991">49%</b> better than the
+HPA alone, for 43% more compute.
 </div>
 """)
 

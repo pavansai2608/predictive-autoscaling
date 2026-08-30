@@ -136,7 +136,8 @@ python src/train_final.py              # retrain on ALL data -> models/forecaste
 python src/predictor.py                # dry run: prints forecasts, touches nothing
 CAPACITY_PER_POD=20 python src/controller.py    # the real thing: scales the deployment
 python analyze.py                      # score the A/B -> results-r.md, comparison-r.png
-python analyze.py --suffix s           # same, for the step scenario
+python analyze.py --suffix '' --event 5,9   # step scenario, all three arms -> results.md
+make replay-data                       # refreeze both scenarios -> bench/replay*.json
 ```
 
 `controller.py` also reads `DEPLOYMENT`, `NAMESPACE`, `INTERVAL_S`, `HEADROOM`, `MIN_PODS`,
@@ -231,7 +232,7 @@ the controller held 3, and any latency win would have been explained by the extr
 - The container is Python **3.11**, not 3.14, and only ever runs `app/` — the forecaster stays
   on the host. `.venv` is in `.dockerignore` for that reason.
 
-## Repo layout — state as of 2026-08-24
+## Repo layout — state as of 2026-08-30
 
 ```
 app/main.py            FastAPI app under test — deliberately CPU-bound and slow to start
@@ -239,7 +240,14 @@ Dockerfile             python:3.11-slim image `traffic-app:v1`
 Makefile               every command above; ports defined once at the top
 requirements.txt       HOST pipeline deps (pinned) — separate from app/requirements.txt
 collect.py             Prometheus -> data/traffic.parquet
-analyze.py             scores the A/B -> results-*.md + outputs/comparison-*.png
+analyze.py             scores the A/B -> results-*.md + outputs/comparison-*.png.
+                       Arms A/B are required, C (hpa-floor) is optional — it exists
+                       for the step scenario only, and a missing arm is dropped.
+export_replay.py       freezes benchmark windows out of Prometheus before the 15-day
+                       retention eats them -> bench/replay*.json
+retrain.py             scores a fresh candidate against the live model, swaps on a win
+dashboard.py           the Streamlit UI: benchmark replay + live forecast
+.streamlit/config.toml theme only. Amber = reactive arm, cyan = predictive, everywhere
 
 k8s/deployment.yaml    requests == limits == 400m (see Results for why)
 k8s/service.yaml       ClusterIP; the only way load reaches pods
@@ -268,12 +276,16 @@ src/controller.py      the predictive autoscaler
 
 data/traffic.parquet   12,281 rows, 51h, 100% coverage. NOT gitignored: Prometheus
                        keeps 15 days, so this is the one unreproducible artefact.
-bench/*.json           six benchmark runs + their start/end epochs
+bench/*.json           benchmark runs + their start/end epochs. A/B/C = HPA alone /
+                       predictive owns replicas / predictive + HPA floor; the `r`
+                       suffix is the ramp scenario, no suffix is the step.
+bench/replay*.json     those runs frozen out of Prometheus, so the UI outlives the
+                       cluster. `replay.json` = ramp, `replay-step.json` = step.
 bench/discarded/       runs thrown out, with README.md saying why
 ```
 
-Nothing outstanding. A screen recording was considered and deliberately skipped — the
-chart carries the same evidence.
+A screen recording was considered and deliberately skipped — the chart carries the same
+evidence.
 
 **Every number in this file has been measured on this machine.** Do not add one that
 has not. If you change `WORK_MS`, `STARTUP_DELAY_S`, the CPU limit, or `PEAK_RPS`, the
