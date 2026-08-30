@@ -1,4 +1,0 @@
-# System library LightGBM links against. Streamlit Cloud installs from this file
-# before pip runs; without it `import lightgbm` fails with a libgomp error even
-# though pip reported success.
-libgomp1
