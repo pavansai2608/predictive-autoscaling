@@ -17,7 +17,7 @@ STREAMLIT := $(shell [ -x $(VENV)/bin/streamlit ] && echo $(VENV)/bin/streamlit 
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
 .PHONY: run build load deploy pods forward-prom \
-        load-start load-stop capacity collect bench ui
+        load-start load-stop capacity collect bench ui retrain
 
 # Local dev loop: 1s warm-up instead of 15s, and restart on every save.
 run:
@@ -130,3 +130,22 @@ ui:
 # Prometheus keeps 15 days, this file keeps them forever.
 replay-data:
 	$(PY) export_replay.py
+
+# --- keeping the model current -----------------------------------------------
+# Scores a freshly-trained candidate against the live model on data collected
+# SINCE the live model was trained, and swaps only on a real improvement. Safe
+# to run on a timer: with no new data it declines and says so.
+#
+# To schedule it daily at 3am (`crontab -e`), noting that cron has almost no
+# PATH and no venv, so both must be spelled out:
+#
+#   0 3 * * * cd /path/to/predictive-autoscaling && .venv/bin/python retrain.py \
+#             >> logs/retrain.log 2>&1
+#
+# It only reads data/traffic.parquet, so `make collect` has to be running too —
+# otherwise it will keep finding nothing new, correctly and forever.
+retrain:
+	$(PY) retrain.py
+
+retrain-check:
+	$(PY) retrain.py --dry-run

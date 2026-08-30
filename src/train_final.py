@@ -41,12 +41,16 @@ def main(horizon: int = C.HORIZON_STEPS):
 
     (ROOT / "models").mkdir(exist_ok=True)
     out = ROOT / C.MODEL_FILE
+    # trained_through is what makes an honest retrain gate possible later:
+    # without it there is no way to tell which rows this model has already seen,
+    # and scoring a model on its own training data flatters it enormously.
     joblib.dump({"model": model,
                  "features": cols,
                  "horizon": horizon,
                  "quantile": C.QUANTILE,
                  "backend": M.BACKEND,
-                 "trained_rows": len(table)}, out)
+                 "trained_rows": len(table),
+                 "trained_through": table["ts"].max().isoformat()}, out)
 
     print(f"saved -> {out}")
 

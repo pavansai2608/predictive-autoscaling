@@ -106,8 +106,9 @@ difference from luck.
 | Baseline (HPA) | 3 | **467 ms** | 3 |
 | Predictive | 3 | 655 ms | 5 |
 
-**Predictive is 40% worse here**, and the pod traces say why. It is not losing on the
-way up — it reaches 5 pods where the HPA manages 3. It loses on the way *down*:
+**In its original form predictive was 40% worse here**, and the pod traces said why.
+It was not losing on the way up — it reached 5 pods where the HPA managed 3. It lost on
+the way *down*:
 
 ```
                    minute 5 ─┐            ┌─ spike ends
@@ -124,10 +125,33 @@ So on an event with no precursor the forecast is wrong about the *end* as well a
 start, and withdrawing capacity early costs more than adding it late. `MAX_SCALE_DOWN_
 PER_CYCLE = 1` damps this and is not enough at a 30 s interval.
 
-The fix this points to is not a better model. It is to run the HPA *underneath* the
-controller as a floor, so a forecast can add capacity early but never remove what
-current CPU still needs — which is how AWS and KEDA compose predictive with reactive
-scaling rather than replacing one with the other.
+The fix is not a better model. It is to run the HPA *underneath* the controller: the
+forecast sets the HPA's `minReplicas` instead of the replica count, so it can add
+capacity early but only real CPU can take it away. That is `MODE=hpa-floor` in
+[controller.py](src/controller.py), and it is how AWS and KEDA compose predictive with
+reactive scaling rather than replacing one with the other.
+
+Measured, same scenario, three runs each:
+
+| arm | p99 per run | mean p99 | pod-seconds |
+|---|---|---|---|
+| HPA alone | 493 / 540 / 369 | 467 ms | 2,993 |
+| Predictive, owns replicas | 522 / 565 / 879 | 655 ms *(40% worse)* | 3,080 |
+| **Predictive + HPA floor** | 256 / 238 / 228 | **240 ms** *(49% better)* | 4,273 *(+43%)* |
+
+Composition beats both — and the run-to-run spread collapses from 357 ms wide to 28 ms.
+The pod trace shows the mechanism: it reaches 5 pods and *holds* them through the tail
+instead of cutting at minute 8.
+
+```
+HPA alone            22222222222222222223333333333333333333333322222
+Predictive replicas  22222222222222222224555555554443222222222222222
+Predictive + floor   22222333333333333334555555555555555555555522222
+                                            ↑ holds capacity until the spike is over
+```
+
+The compute cost is real: 43% more pod-seconds than the HPA alone. Whether that trade is
+worth making is a business question, not a technical one.
 
 ## Reproducing
 

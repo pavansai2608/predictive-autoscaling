@@ -166,8 +166,23 @@ spike runs to minute 9; it is back to MIN_PODS by minute 11, where the HPA holds
 minute 14. Withdrawing capacity early costs more than adding it late, and
 MAX_SCALE_DOWN_PER_CYCLE=1 is not enough damping at a 30s interval.
 
-The fix is composition, not a better model: run the HPA underneath as a floor so a
-forecast can add capacity early but never remove what current CPU still needs.
+FIXED by composition, not a better model. `MODE=hpa-floor` makes the controller set the
+HPA's minReplicas instead of the replica count: the forecast can raise capacity early,
+but lowering the floor only PERMITS removal — the HPA still declines while CPU is high.
+
+Step scenario, 3 runs each, measured 2026-08-30:
+
+| arm                       | p99 per run     | mean   | pod-seconds |
+|---------------------------|-----------------|--------|-------------|
+| HPA alone                 | 493/540/369     | 467 ms | 2,993       |
+| predictive owns replicas  | 522/565/879     | 655 ms | 3,080       |
+| predictive + HPA floor    | 256/238/228     | 240 ms | 4,273       |
+
+49% better than the HPA alone and 63% better than predictive alone, with the spread
+collapsing from 357ms wide to 28ms. Costs 43% more compute than the HPA alone.
+
+MODE=replicas is kept, not deleted: it is the arm the middle row measures, and removing
+it would make that row unreproducible.
 
 Both arms must provision to the SAME steady-state pod count or the benchmark compares
 generosity, not timing. That is why `k8s/deployment.yaml` sets `requests == limits ==
