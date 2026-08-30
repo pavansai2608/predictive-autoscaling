@@ -199,11 +199,14 @@ python analyze.py                    # → results-r.md, outputs/comparison-r.pn
 make ui        # http://localhost:8501
 ```
 
-Two pages. **Benchmark replay** steps through a recorded 20-minute run with both
+Two pages. **Benchmark replay** steps through a recorded 20-minute run with the
 policies side by side — pod counts, arriving traffic, response times, and the
-controller's own forecasts at each moment. It reads `bench/replay.json`, frozen out
-of Prometheus by `export_replay.py`, so it needs no cluster and keeps working after
-Prometheus' 15-day retention has discarded the runs.
+controller's own forecasts at each moment. Pick either scenario: the gradual ramp
+compares two arms, the instant spike compares three and shows the HPA-floor arm
+winning where forecasting alone lost. It reads `bench/replay.json` and
+`bench/replay-step.json`, frozen out of Prometheus by `export_replay.py`, so it
+needs no cluster and keeps working after Prometheus' 15-day retention has discarded
+the runs.
 
 **Live forecast** loads the trained model and reads Prometheus directly: current
 rate, what the model expects 60 s ahead, and the pod count that implies. When the
