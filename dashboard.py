@@ -48,7 +48,7 @@ def inject_style():
     and font family; this covers the type scale, the eyebrow labels, the metric
     rails and the pod gauge — none of which have config equivalents.
     """
-    st.markdown("""
+    st.html("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
@@ -125,7 +125,7 @@ def inject_style():
   [data-testid="stSidebarNav"], footer, #MainMenu{visibility:hidden}
   .stSlider [data-baseweb="slider"]{padding-top:.2rem}
   hr{border-color:#222c3a !important; margin:1.1rem 0 !important}
-</style>""", unsafe_allow_html=True)
+</style>""")
 
 
 def pod_gauge(n: int, colour: str, slots: int = 8) -> str:
@@ -179,7 +179,7 @@ def page_replay():
     runs = {r["name"]: r for r in data["runs"]}
     pairs = [("A1r", "B1r"), ("A2r", "B2r"), ("A3r", "B3r")]
 
-    st.markdown(f"""
+    st.html(f"""
 <div class="masthead">
   <span class="eyebrow">Recorded benchmark &middot; 20 minutes &middot; 3 runs per arm</span>
   <h1>Watch the pods arrive early</h1>
@@ -192,7 +192,7 @@ def page_replay():
     <div class="fig"><b>62%</b><span>FASTER</span></div>
     <div class="fig"><b>+28%</b><span>COMPUTE</span></div>
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""")
 
     c1, c2 = st.columns([1, 3])
     with c1:
@@ -228,13 +228,12 @@ def page_replay():
                                    (right, b, "Predictive", PRED)):
         with col:
             kind = "reacts to cpu" if colour == BASE else "scales on forecast"
-            st.markdown(
-                f'<div class="armhead" style="--rail:{colour}">'
-                f'<b>{name}</b><span>{kind}</span></div>', unsafe_allow_html=True)
+            st.html(f'<div class="armhead" style="--rail:{colour}">'
+                    f'<b>{name}</b><span>{kind}</span></div>')
             rate = value_at(run, "rate", t) or 0
             pods = value_at(run, "pods", t) or 0
             p99 = value_at(run, "p99", t)
-            st.markdown(pod_gauge(pods, colour), unsafe_allow_html=True)
+            st.html(pod_gauge(pods, colour))
             m1, m2, m3 = st.columns(3)
             m1.metric("Traffic in", f"{rate:.0f}/s")
             m2.metric("Pods", pods)
@@ -420,7 +419,7 @@ inject_style()
 
 page = st.sidebar.radio("View", ["Benchmark replay", "Live forecast"])
 st.sidebar.divider()
-st.sidebar.markdown("""
+st.sidebar.html("""
 <span class="eyebrow">Measured on this cluster</span>
 
 <div style="font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:2;
@@ -445,6 +444,6 @@ On a gradual ramp that cuts the slowest 1% of responses by
 <b style="color:#3fa9f5">62%</b> for <b>28%</b> more compute. On a spike with no warning
 it does not help &mdash; and that is reported too.
 </div>
-""", unsafe_allow_html=True)
+""")
 
 page_replay() if page == "Benchmark replay" else page_live()
