@@ -29,11 +29,112 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
-BASE = "#c2591f"      # baseline / HPA — same hue as outputs/comparison-r.png
-PRED = "#2a78d6"      # predictive
+# Amber = reactive, cyan = predictive, everywhere. Matches
+# chartCategoricalColors in .streamlit/config.toml so Altair, the metric rails
+# and the pod blocks all agree without any of them being told twice.
+BASE = "#f0873f"      # baseline / HPA
+PRED = "#3fa9f5"      # predictive
+DIM  = "#8b95a6"
 RUN_SECONDS = 1200    # every benchmark run is 20 minutes
 
-st.set_page_config(page_title="Predictive Autoscaling", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Predictive Autoscaling", page_icon="📈",
+                   layout="wide", initial_sidebar_state="expanded")
+
+
+def inject_style():
+    """Fonts and the handful of things the theme config cannot reach.
+
+    Kept deliberately small. Streamlit's own theme system handles colour, radius
+    and font family; this covers the type scale, the eyebrow labels, the metric
+    rails and the pod gauge — none of which have config equivalents.
+    """
+    st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  /* ---- type scale -------------------------------------------------- */
+  .stApp h1{
+    font-weight:700; font-size:2.45rem; line-height:1.05;
+    letter-spacing:-.025em; margin-bottom:.35rem;
+  }
+  .stApp h2{font-weight:600; font-size:1.35rem; letter-spacing:-.012em}
+  .stApp h3{font-weight:600; font-size:1.05rem; letter-spacing:-.008em}
+
+  /* Every figure in the app is monospace so columns of digits line up and
+     a number changing does not reflow the text beside it. */
+  [data-testid="stMetricValue"], .stDataFrame, code, .mono{
+    font-family:"JetBrains Mono", ui-monospace, monospace !important;
+    font-variant-numeric:tabular-nums;
+  }
+
+  /* ---- eyebrow: a small uppercase label above a section ------------- */
+  .eyebrow{
+    font-family:"JetBrains Mono", monospace; font-size:.66rem;
+    letter-spacing:.19em; text-transform:uppercase; color:#7d8798;
+    display:block; margin:0 0 .3rem;
+  }
+
+  /* ---- masthead ----------------------------------------------------- */
+  .masthead{
+    border-bottom:1px solid #26303f; padding:.2rem 0 1.1rem; margin-bottom:1.4rem;
+  }
+  .masthead .sub{color:#9aa5b5; font-size:1.02rem; max-width:64ch; margin:.15rem 0 0}
+  .headline{
+    display:flex; gap:2.2rem; flex-wrap:wrap; margin-top:1.1rem;
+  }
+  .headline .fig{border-left:2px solid #26303f; padding-left:.85rem}
+  .headline .fig b{
+    font-family:"JetBrains Mono", monospace; font-size:1.5rem; font-weight:600;
+    display:block; line-height:1.15; font-variant-numeric:tabular-nums;
+  }
+  .headline .fig span{font-size:.72rem; color:#7d8798; letter-spacing:.03em}
+  .fig.amber b{color:#f0873f} .fig.amber{border-left-color:#f0873f}
+  .fig.cyan  b{color:#3fa9f5} .fig.cyan{border-left-color:#3fa9f5}
+
+  /* ---- arm panels: a coloured rail is the fastest possible label ----- */
+  .armhead{
+    display:flex; align-items:baseline; gap:.6rem; padding:.55rem 0 .55rem .8rem;
+    border-left:3px solid var(--rail); margin-bottom:.7rem;
+  }
+  .armhead b{font-size:1.02rem; font-weight:600; color:var(--rail)}
+  .armhead span{font-family:"JetBrains Mono",monospace; font-size:.66rem;
+                letter-spacing:.13em; text-transform:uppercase; color:#7d8798}
+
+  /* ---- pod gauge: filled slots against a fixed frame ---------------- */
+  .pods{display:flex; gap:4px; align-items:flex-end; height:46px; margin:.1rem 0 .2rem}
+  .pods i{
+    width:22px; border-radius:2px; display:block;
+    border:1px solid #26303f; background:transparent; height:46px;
+  }
+  .pods i.on{border-color:transparent}
+  /* Unfilled slots stay visible so "3 of a possible 8" is legible at a
+     glance — a bare count of blocks hides how much headroom is left. */
+
+  /* ---- metrics ------------------------------------------------------ */
+  [data-testid="stMetric"]{
+    background:#141b25; border:1px solid #222c3a; border-radius:4px;
+    padding:.6rem .8rem;
+  }
+  [data-testid="stMetricLabel"] p{
+    font-size:.68rem !important; letter-spacing:.13em; text-transform:uppercase;
+    color:#7d8798 !important;
+  }
+
+  /* ---- chrome ------------------------------------------------------- */
+  [data-testid="stSidebarNav"], footer, #MainMenu{visibility:hidden}
+  .stSlider [data-baseweb="slider"]{padding-top:.2rem}
+  hr{border-color:#222c3a !important; margin:1.1rem 0 !important}
+</style>""", unsafe_allow_html=True)
+
+
+def pod_gauge(n: int, colour: str, slots: int = 8) -> str:
+    """n filled slots out of `slots`, so headroom is visible, not implied."""
+    n = int(n or 0)
+    return ('<div class="pods">'
+            + "".join(f'<i class="on" style="background:{colour}"></i>' for _ in range(min(n, slots)))
+            + "".join('<i></i>' for _ in range(max(0, slots - n)))
+            + "</div>")
 
 
 # ---------------------------------------------------------------- data
@@ -78,10 +179,20 @@ def page_replay():
     runs = {r["name"]: r for r in data["runs"]}
     pairs = [("A1r", "B1r"), ("A2r", "B2r"), ("A3r", "B3r")]
 
-    st.title("Watch the pods arrive early")
-    st.caption("The same traffic, sent twice. Left: Kubernetes' built-in autoscaler, "
-               "which reacts to CPU. Right: a forecast that scales ahead of the load. "
-               "Every number was recorded during a real 20-minute run.")
+    st.markdown(f"""
+<div class="masthead">
+  <span class="eyebrow">Recorded benchmark &middot; 20 minutes &middot; 3 runs per arm</span>
+  <h1>Watch the pods arrive early</h1>
+  <p class="sub">The same traffic, sent twice. Kubernetes' built-in autoscaler reacts to
+  CPU that has already risen. The forecast scales ahead of it. Every figure below was
+  recorded during a real run.</p>
+  <div class="headline">
+    <div class="fig amber"><b>479 ms</b><span>REACTIVE &mdash; SLOWEST 1%</span></div>
+    <div class="fig cyan"><b>183 ms</b><span>PREDICTIVE &mdash; SLOWEST 1%</span></div>
+    <div class="fig"><b>62%</b><span>FASTER</span></div>
+    <div class="fig"><b>+28%</b><span>COMPUTE</span></div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
     c1, c2 = st.columns([1, 3])
     with c1:
@@ -113,23 +224,21 @@ def page_replay():
     st.info(f"**Minute {t // 60}:{t % 60:02d}** — {phase}")
 
     left, right = st.columns(2)
-    for col, run, name, colour in ((left, a, "Baseline — Kubernetes HPA", BASE),
-                                   (right, b, "Predictive — forecast", PRED)):
+    for col, run, name, colour in ((left, a, "Baseline", BASE),
+                                   (right, b, "Predictive", PRED)):
         with col:
-            st.subheader(name)
+            kind = "reacts to cpu" if colour == BASE else "scales on forecast"
+            st.markdown(
+                f'<div class="armhead" style="--rail:{colour}">'
+                f'<b>{name}</b><span>{kind}</span></div>', unsafe_allow_html=True)
             rate = value_at(run, "rate", t) or 0
             pods = value_at(run, "pods", t) or 0
             p99 = value_at(run, "p99", t)
+            st.markdown(pod_gauge(pods, colour), unsafe_allow_html=True)
             m1, m2, m3 = st.columns(3)
             m1.metric("Traffic in", f"{rate:.0f}/s")
-            m2.metric("Pods running", pods)
+            m2.metric("Pods", pods)
             m3.metric("Slowest 1%", f"{p99} ms" if p99 else "–")
-            # One block per pod: the clearest possible "did capacity arrive yet".
-            st.markdown(
-                "".join(f"<span style='display:inline-block;width:26px;height:34px;"
-                        f"margin:0 4px 4px 0;border-radius:3px;background:{colour}'></span>"
-                        for _ in range(int(pods))) or "<i>no pods</i>",
-                unsafe_allow_html=True)
 
             d = decision_at(run, t)
             if d:
@@ -307,14 +416,35 @@ def page_live():
 
 
 # ---------------------------------------------------------------- shell
+inject_style()
+
 page = st.sidebar.radio("View", ["Benchmark replay", "Live forecast"])
 st.sidebar.divider()
-st.sidebar.markdown(
-    "**Predictive autoscaling**\n\n"
-    "Forecast the request rate 60 s ahead and add pods before the traffic arrives.\n\n"
-    "- pod start-up: **19 s** (measured)\n"
-    "- one pod handles: **20 req/s** (measured)\n"
-    "- backtest: **64.5%** below the naive baseline\n"
-    "- benchmark: **p99 62% lower**, +28% compute")
+st.sidebar.markdown("""
+<span class="eyebrow">Measured on this cluster</span>
+
+<div style="font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:2;
+            font-variant-numeric:tabular-nums">
+<span style="color:#7d8798">pod start-up</span>
+<b style="float:right">19 s</b><br>
+<span style="color:#7d8798">one pod serves</span>
+<b style="float:right">20 req/s</b><br>
+<span style="color:#7d8798">forecast horizon</span>
+<b style="float:right">60 s</b><br>
+<span style="color:#7d8798">history collected</span>
+<b style="float:right">51 h</b><br>
+<span style="color:#7d8798">vs naive baseline</span>
+<b style="float:right;color:#3fa9f5">-64.5%</b>
+</div>
+
+<span class="eyebrow" style="margin-top:1.2rem">The claim</span>
+
+<div style="font-size:.82rem;color:#9aa5b5;line-height:1.55">
+Forecast the request rate 60&nbsp;s ahead and add pods <i>before</i> the traffic arrives.
+On a gradual ramp that cuts the slowest 1% of responses by
+<b style="color:#3fa9f5">62%</b> for <b>28%</b> more compute. On a spike with no warning
+it does not help &mdash; and that is reported too.
+</div>
+""", unsafe_allow_html=True)
 
 page_replay() if page == "Benchmark replay" else page_live()

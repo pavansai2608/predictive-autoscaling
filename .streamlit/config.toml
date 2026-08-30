@@ -1,9 +1,54 @@
-# Skips the one-time "enter your email" prompt on first run, which otherwise
-# blocks `make ui` waiting for input that has nothing to do with this project.
+# An empty email in credentials.toml is what stops the first-run prompt; this
+# file is only appearance. gatherUsageStats is a separate switch from that.
 [browser]
 gatherUsageStats = false
 
+# ---------------------------------------------------------------------------
+# Instrument-panel theme.
+#
+# The two accents are not decoration. Amber is the reactive arm and cyan the
+# predictive arm EVERYWHERE — metrics, pod blocks, chart series — so the
+# comparison reads by colour before a single number is parsed. They are listed
+# first in chartCategoricalColors so Altair picks them up without the app
+# passing an explicit scale.
+#
+# Ground is a deep blue-slate rather than neutral black: pure #000 makes the
+# amber look sickly, and a blue cast keeps both accents sitting on the same
+# temperature family as the surface behind them.
+# ---------------------------------------------------------------------------
 [theme]
-# Matches outputs/comparison-r.png so the dashboard and the report agree:
-# blue is the predictive arm, orange the baseline.
-primaryColor = "#2a78d6"
+base = "dark"
+
+backgroundColor          = "#0f1319"   # the panel itself
+secondaryBackgroundColor = "#171e29"   # raised cards, sidebar, table headers
+textColor                = "#e7ecf3"
+primaryColor             = "#3fa9f5"   # predictive + all interactive chrome
+borderColor              = "#26303f"
+linkColor                = "#5cb8ff"
+
+# Archivo is a grotesque with signage character — it reads as instrumentation
+# rather than as the default UI face. JetBrains Mono carries every figure so
+# digits stay in column. Both are loaded by the <link> injected in dashboard.py.
+font        = "Archivo, ui-sans-serif, system-ui, sans-serif"
+headingFont = "Archivo, ui-sans-serif, system-ui, sans-serif"
+codeFont    = "JetBrains Mono, ui-monospace, SFMono-Regular, monospace"
+
+baseFontSize   = 15
+baseRadius     = "0.25rem"    # nearly square; rounded cards read as generic
+buttonRadius   = "0.25rem"
+showWidgetBorder = true
+
+metricValueFontSize   = "2rem"
+metricValueFontWeight = 600
+
+# amber, cyan, then neutrals — arm colours first, on purpose
+chartCategoricalColors = ["#f0873f", "#3fa9f5", "#8b95a6", "#6ee7c8", "#c9a227"]
+chartSequentialColors  = ["#101a26", "#16293c", "#1c3a55", "#234d71", "#2b628e", "#3479ac", "#3fa9f5"]
+
+orangeColor = "#f0873f"
+blueColor   = "#3fa9f5"
+grayColor   = "#8b95a6"
+
+[theme.sidebar]
+backgroundColor = "#0b0f15"
+borderColor     = "#212a37"
