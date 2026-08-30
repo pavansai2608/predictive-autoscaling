@@ -157,12 +157,17 @@ A/B benchmark, identical traffic, 3 runs per arm:
 | scenario | p99 baseline | p99 predictive | pod-seconds | verdict |
 |----------|--------------|----------------|-------------|---------|
 | ramp (20->80 req/s over 6 min) | 479 ms | **183 ms** | 3,053 -> 3,907 | **62% lower, +28% compute** |
-| step (instant 4x)              | 467 ms | 522 ms (1 run) | — | no advantage |
+| step (instant 4x)              | 467 ms | 655 ms | 2,993 -> 3,080 | **40% WORSE** |
 
-The step result is the honest half: with no precursor there is nothing to forecast, both
-arms are blind for 30-60s, and pods take 19s regardless. The controller still provisioned
-CORRECTLY there (5 pods vs the HPA's 3) — arriving late with the right answer is the
-point being made.
+The step result is the honest half, and it is worse than "no advantage". The controller
+is not losing on the way up (it reaches 5 pods where the HPA manages 3) — it loses on the
+way DOWN. Around minute 8 the forecast sees the spike ending and starts cutting while the
+spike runs to minute 9; it is back to MIN_PODS by minute 11, where the HPA holds 3 until
+minute 14. Withdrawing capacity early costs more than adding it late, and
+MAX_SCALE_DOWN_PER_CYCLE=1 is not enough damping at a 30s interval.
+
+The fix is composition, not a better model: run the HPA underneath as a floor so a
+forecast can add capacity early but never remove what current CPU still needs.
 
 Both arms must provision to the SAME steady-state pod count or the benchmark compares
 generosity, not timing. That is why `k8s/deployment.yaml` sets `requests == limits ==

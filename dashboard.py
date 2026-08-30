@@ -200,10 +200,44 @@ def load_model():
     return joblib.load(p) if p.exists() else None
 
 
+@st.cache_data(ttl=30)
+def prometheus_reachable() -> bool:
+    """Cheap probe, so the page can explain itself instead of throwing.
+
+    On Streamlit Cloud this is always False: Prometheus runs on the laptop that
+    ran the experiment. Saying so plainly is better than showing a visitor a
+    connection error they cannot act on.
+    """
+    try:
+        import requests
+        return requests.get("http://localhost:9090/-/healthy", timeout=2).status_code == 200
+    except Exception:
+        return False
+
+
 def page_live():
     st.title("Live forecast")
-    st.caption("Reads Prometheus and the trained model right now. Needs `make forward-prom` "
-               "running, and traffic flowing (`make load-start`).")
+
+    if not prometheus_reachable():
+        st.info(
+            "**This page only works on the machine running the cluster.**\n\n"
+            "It reads Prometheus at `localhost:9090` and asks the trained model what "
+            "traffic is coming in the next 60 seconds. Prometheus is not reachable from "
+            "here, so there is nothing live to read.\n\n"
+            "Everything the project measured is on the **Benchmark replay** page, which "
+            "needs nothing running.")
+        with st.expander("What this page shows when it is running"):
+            st.markdown(
+                "- current request rate, straight from Prometheus\n"
+                "- what the model expects 60 seconds ahead, and the difference\n"
+                "- the pod count that implies, at the measured 20 req/s per pod\n"
+                "- the last 30 minutes charted, with the forecast as a dashed line\n"
+                "- a **hold** notice when recent history has gaps — the model declining "
+                "to answer rather than guessing\n\n"
+                "To run it yourself: `make forward-prom`, `make load-start`, then `make ui`.")
+        return
+
+    st.caption("Reads Prometheus and the trained model right now.")
 
     bundle = load_model()
     if not bundle:

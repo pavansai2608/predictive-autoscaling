@@ -103,17 +103,31 @@ difference from luck.
 
 | arm | runs | p99 | pods reached |
 |---|---|---|---|
-| Baseline (HPA) | 3 | 467 ms | 3 |
-| Predictive | 1 | 522 ms | 5 |
+| Baseline (HPA) | 3 | **467 ms** | 3 |
+| Predictive | 3 | 655 ms | 5 |
 
-**No advantage.** The predictive arm here is a *single* run, not three — once the
-ramp scenario showed where the real difference lay, the remaining budget went there.
-Treat the step figure as indicative rather than as a measured result. A forecaster reading lag features has nothing to forecast from
-until the step has already happened; both policies are blind for the first 30–60
-seconds and pods take 19 s regardless. The controller provisioned *correctly* — 5
-pods against the HPA's 3 — and still did not win, because the queue had already
-formed. This is why production systems run predictive scaling *alongside* reactive
-policies rather than instead of them.
+**Predictive is 40% worse here**, and the pod traces say why. It is not losing on the
+way up — it reaches 5 pods where the HPA manages 3. It loses on the way *down*:
+
+```
+                   minute 5 ─┐            ┌─ spike ends
+baseline    2222222222222222222333333333333333333333333322222
+predictive  2222222222222222222455555555443332222222222222222
+                                 ↑ up to 5   ↑ already cutting, spike still running
+```
+
+Around minute 8 the forecast sees the spike ending and starts removing pods — while
+the spike runs to minute 9. It is back to the 2-pod floor by minute 11. The HPA, being
+slow, holds 3 pods until minute 14 and coasts through the tail.
+
+So on an event with no precursor the forecast is wrong about the *end* as well as the
+start, and withdrawing capacity early costs more than adding it late. `MAX_SCALE_DOWN_
+PER_CYCLE = 1` damps this and is not enough at a 30 s interval.
+
+The fix this points to is not a better model. It is to run the HPA *underneath* the
+controller as a floor, so a forecast can add capacity early but never remove what
+current CPU still needs — which is how AWS and KEDA compose predictive with reactive
+scaling rather than replacing one with the other.
 
 ## Reproducing
 
