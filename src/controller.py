@@ -67,6 +67,32 @@ MAX_PODS = int(os.getenv("MAX_PODS", "20"))
 # add capacity costs users, being slow to remove it costs pennies.
 MAX_SCALE_DOWN_PER_CYCLE = 1
 
+# HOW THE DECISION IS APPLIED. Two modes, and the difference is what happens on
+# the way DOWN.
+#
+#   "replicas"  set the deployment's replica count directly. The forecast owns
+#               the pod count outright, up AND down. This is what the first
+#               benchmark measured.
+#
+#   "hpa-floor" set the HPA's minReplicas instead, leaving the HPA installed.
+#               The forecast can raise capacity ahead of demand, but only real
+#               CPU can take it away, because the HPA will not scale below its
+#               own floor and will not scale down while utilisation says no.
+#
+# Measured on 2026-08-29, step scenario (instant 4x), 3 runs each: "replicas"
+# scored p99 655ms against the plain HPA's 467ms — 40% WORSE. The pod traces
+# show it is not losing on the way up (it reached 5 pods where the HPA managed
+# 3) but on the way down: around minute 8 the forecast sees the spike ending and
+# starts cutting, while the spike runs to minute 9, and it is back at MIN_PODS
+# by minute 11 where the HPA held 3 until minute 14.
+#
+# Withdrawing capacity early costs more than adding it late, and a forecast has
+# no more warning about an event's END than about its start. "hpa-floor" is the
+# structural answer: never let the forecast remove what current load still
+# needs. It is also how AWS and KEDA compose predictive with reactive scaling —
+# alongside, not instead of.
+MODE = os.getenv("MODE", "replicas")
+
 
 def load_bundle():
     path = ROOT / C.MODEL_FILE
@@ -79,7 +105,7 @@ def k8s_api():
     # Loaded from ~/.kube/config because this runs on the laptop, not inside a
     # pod. In-cluster it would be load_incluster_config() plus a ServiceAccount.
     kube_config.load_kube_config()
-    return client.AppsV1Api()
+    return client.AppsV1Api(), client.AutoscalingV2Api()
 
 
 def current_replicas(api) -> int:
@@ -90,6 +116,31 @@ def set_replicas(api, n: int):
     api.patch_namespaced_deployment_scale(
         DEPLOYMENT, NAMESPACE, {"spec": {"replicas": int(n)}}
     )
+
+
+def set_hpa_floor(hpa_api, n: int, max_pods: int):
+    """Raise or lower the HPA's minReplicas — the forecast's only lever.
+
+    minReplicas must stay <= maxReplicas or the API rejects the patch outright,
+    so the clamp is not defensive tidiness.
+
+    Note what this does NOT do: lowering the floor does not remove pods. It only
+    permits the HPA to remove them, and the HPA will decline while CPU is still
+    high. That asymmetry is the entire point of this mode.
+    """
+    n = max(1, min(int(n), int(max_pods)))
+    hpa_api.patch_namespaced_horizontal_pod_autoscaler(
+        DEPLOYMENT, NAMESPACE, {"spec": {"minReplicas": n}}
+    )
+
+
+def hpa_state(hpa_api):
+    """(minReplicas, maxReplicas) of the live HPA, or None if it is not there."""
+    try:
+        h = hpa_api.read_namespaced_horizontal_pod_autoscaler(DEPLOYMENT, NAMESPACE)
+        return int(h.spec.min_replicas or 1), int(h.spec.max_replicas)
+    except Exception:
+        return None
 
 
 def log_row(**kw):
@@ -107,10 +158,21 @@ def log_row(**kw):
 def main():
     bundle = load_bundle()
     model, feats, horizon = bundle["model"], bundle["features"], bundle["horizon"]
-    api = k8s_api()
+    api, hpa_api = k8s_api()
+
+    if MODE == "hpa-floor" and hpa_state(hpa_api) is None:
+        sys.exit("MODE=hpa-floor needs the HPA installed, and it is not.\n"
+                 "  kubectl apply -f k8s/hpa.yaml")
+    if MODE == "replicas" and hpa_state(hpa_api) is not None:
+        # Both would fight over the same replica count every cycle and the
+        # benchmark would measure the argument rather than either policy.
+        sys.exit("MODE=replicas needs the HPA GONE, and it is installed.\n"
+                 "  kubectl delete -f k8s/hpa.yaml")
 
     print(f"predictive autoscaler running\n"
           f"  deployment      : {DEPLOYMENT} (ns {NAMESPACE})\n"
+          f"  mode            : {MODE}"
+          f"{'  (sets the HPA floor; only CPU removes pods)' if MODE == 'hpa-floor' else '  (owns the replica count outright)'}\n"
           f"  horizon         : {horizon} steps = {horizon * C.STEP_SECONDS}s ahead\n"
           f"  capacity/pod    : {CAPACITY_PER_POD:g} req/s   headroom {HEADROOM:g}\n"
           f"  bounds          : {MIN_PODS}-{MAX_PODS} pods\n"
@@ -160,20 +222,33 @@ def main():
             want = int(np.clip(math.ceil(pred * HEADROOM / CAPACITY_PER_POD),
                                MIN_PODS, MAX_PODS))
 
-            if want < pods_now - MAX_SCALE_DOWN_PER_CYCLE:
-                # Damping. Without it a noisy forecast makes pods flap up and
-                # down every cycle, which looks broken and thrashes the app.
-                want = pods_now - MAX_SCALE_DOWN_PER_CYCLE
-                note = "damped"
+            if MODE == "hpa-floor":
+                # No damping here. The floor may fall as fast as the forecast
+                # likes, because lowering it cannot remove a pod — the HPA still
+                # has to agree, and it will not while CPU is high. Damping the
+                # floor would only delay the eventual scale-down for no benefit.
+                floor, hmax = hpa_state(hpa_api)
+                if want != floor:
+                    set_hpa_floor(hpa_api, want, hmax)
+                    action = "floor_up" if want > floor else "floor_down"
+                else:
+                    action = "none"
+                reason = f"floor {floor}->{want}"
             else:
-                note = "ok"
+                if want < pods_now - MAX_SCALE_DOWN_PER_CYCLE:
+                    # Damping. Without it a noisy forecast makes pods flap up and
+                    # down every cycle, which looks broken and thrashes the app.
+                    want = pods_now - MAX_SCALE_DOWN_PER_CYCLE
+                    note = "damped"
+                else:
+                    note = "ok"
 
-            if want == pods_now:
-                action, reason = "none", note
-            else:
-                set_replicas(api, want)
-                action = "scale_up" if want > pods_now else "scale_down"
-                reason = note
+                if want == pods_now:
+                    action, reason = "none", note
+                else:
+                    set_replicas(api, want)
+                    action = "scale_up" if want > pods_now else "scale_down"
+                    reason = note
 
             print(f"  {stamp}  now={now_rate:7.2f}  pred={pred:7.2f}  "
                   f"pods {pods_now}->{want}  {action}")
