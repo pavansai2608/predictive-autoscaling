@@ -53,6 +53,51 @@ def inject_style():
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
+  /* ---- the ground ---------------------------------------------------
+     Same #0f1319, but built up in layers instead of left flat:
+
+       1. a cyan bloom top-left and an amber bloom top-right — the two arms,
+          bleeding in from the edges rather than sitting anywhere specific
+       2. graph paper: a 120px major grid over a 24px minor grid, both at
+          very low alpha. This is an instrument for reading measurements, so
+          the surface it sits on is ruled like one.
+       3. a floor vignette so the page has a bottom rather than fading out
+
+     background-attachment:fixed keeps the grid still while content scrolls,
+     which reads as a panel you are looking THROUGH rather than a texture
+     glued to the content.
+  ------------------------------------------------------------------- */
+  .stApp{
+    background-color:#0f1319;
+    background-image:
+      radial-gradient(1100px 620px at 8% -8%,  rgba(63,169,245,.15), transparent 58%),
+      radial-gradient(900px  520px at 96% -4%, rgba(240,135,63,.10), transparent 60%),
+      radial-gradient(1200px 700px at 50% 118%, rgba(6,9,14,.85),    transparent 62%),
+      linear-gradient(rgba(150,180,220,.030) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150,180,220,.030) 1px, transparent 1px),
+      linear-gradient(rgba(150,180,220,.013) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150,180,220,.013) 1px, transparent 1px);
+    background-size:
+      auto, auto, auto,
+      120px 120px, 120px 120px,
+      24px 24px, 24px 24px;
+    background-attachment:fixed;
+  }
+
+  /* Panels float over the grid instead of hiding it. The inset highlight is
+     a single hairline of light on the top edge — the thing that separates a
+     surface from a coloured rectangle. */
+  [data-testid="stMetric"], .stDataFrame, [data-testid="stAlert"]{
+    background:rgba(19,26,36,.74) !important;
+    backdrop-filter:blur(3px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.045);
+  }
+
+  section[data-testid="stSidebar"]{
+    background-image:linear-gradient(180deg, rgba(63,169,245,.055), transparent 240px);
+    border-right:1px solid #1b2431;
+  }
+
   /* ---- type scale -------------------------------------------------- */
   .stApp h1{
     font-weight:700; font-size:2.45rem; line-height:1.05;
@@ -77,7 +122,13 @@ def inject_style():
 
   /* ---- masthead ----------------------------------------------------- */
   .masthead{
-    border-bottom:1px solid #26303f; padding:.2rem 0 1.1rem; margin-bottom:1.4rem;
+    padding:.2rem 0 1.2rem; margin-bottom:1.4rem; position:relative;
+  }
+  /* A rule that fades out reads as a horizon; a flat 1px border reads as a
+     table cell. Cyan at the left because that is the arm the page argues for. */
+  .masthead::after{
+    content:""; position:absolute; left:0; right:0; bottom:0; height:1px;
+    background:linear-gradient(90deg, #3fa9f5 0%, #26303f 22%, transparent 78%);
   }
   .masthead .sub{color:#9aa5b5; font-size:1.02rem; max-width:64ch; margin:.15rem 0 0}
   .headline{
@@ -108,6 +159,9 @@ def inject_style():
     border:1px solid #26303f; background:transparent; height:46px;
   }
   .pods i.on{border-color:transparent}
+  /* Lit slots glow slightly in their own colour, so a pod appearing registers
+     out of the corner of the eye while you are reading the chart below. */
+  .pods i.on{box-shadow:0 0 10px -1px currentColor}
   /* Unfilled slots stay visible so "3 of a possible 8" is legible at a
      glance — a bare count of blocks hides how much headroom is left. */
 
@@ -132,7 +186,10 @@ def pod_gauge(n: int, colour: str, slots: int = 8) -> str:
     """n filled slots out of `slots`, so headroom is visible, not implied."""
     n = int(n or 0)
     return ('<div class="pods">'
-            + "".join(f'<i class="on" style="background:{colour}"></i>' for _ in range(min(n, slots)))
+            # color as well as background: the CSS glow uses currentColor, so
+            # each lit slot haloes in its own arm colour rather than in ink.
+            + "".join(f'<i class="on" style="background:{colour};color:{colour}"></i>'
+                      for _ in range(min(n, slots)))
             + "".join('<i></i>' for _ in range(max(0, slots - n)))
             + "</div>")
 
