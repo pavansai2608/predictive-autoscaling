@@ -4,51 +4,61 @@
 gatherUsageStats = false
 
 # ---------------------------------------------------------------------------
-# Instrument-panel theme.
+# Printed-report theme.
 #
-# The two accents are not decoration. Amber is the reactive arm and cyan the
-# predictive arm EVERYWHERE — metrics, pod blocks, chart series — so the
-# comparison reads by colour before a single number is parsed. They are listed
-# first in chartCategoricalColors so Altair picks them up without the app
-# passing an explicit scale.
+# These values MUST track the tokens at the top of dashboard.py. Streamlit's own
+# widgets — slider, segmented control, dataframe, expander — are painted from
+# here, not from the injected CSS, so a mismatch shows up as controls sitting on
+# a slightly wrong stock.
 #
-# Ground is a deep blue-slate rather than neutral black: pure #000 makes the
-# amber look sickly, and a blue cast keeps both accents sitting on the same
-# temperature family as the surface behind them.
+# THREE accents, and they are not decoration. Each is one arm of the benchmark:
+# rust = the stock HPA, navy = the forecast owning the replica count, forest =
+# the forecast raising the HPA's floor. The same three appear in the README and
+# in analyze.py's figures, so the comparison reads by colour before a single
+# number is parsed. All three clear 6:1 on both the paper and the card fill, and
+# the charts also key each arm by DASH so the series survive greyscale printing
+# and red-green colour blindness.
+#
+# dashboard.py passes explicit Altair scales rather than relying on the order
+# below, so an arm keeps its colour on a two-arm scenario as well as a three-arm
+# one. The order here is the fallback, not the mechanism.
 # ---------------------------------------------------------------------------
 [theme]
-base = "dark"
+base = "light"
 
-backgroundColor          = "#0f1319"   # the panel itself
-secondaryBackgroundColor = "#171e29"   # raised cards, sidebar, table headers
-textColor                = "#e7ecf3"
-primaryColor             = "#3fa9f5"   # predictive + all interactive chrome
-borderColor              = "#26303f"
-linkColor                = "#5cb8ff"
+backgroundColor          = "#e8edee"   # cool drafting stock, not a warm cream
+secondaryBackgroundColor = "#dde4e5"   # sidebar, table headers, raised surfaces
+textColor                = "#101619"
+primaryColor             = "#8c2f39"   # rust: interactive chrome and the lead accent
+borderColor              = "#c8d1d3"
+linkColor                = "#15616d"
 
-# Archivo is a grotesque with signage character — it reads as instrumentation
-# rather than as the default UI face. JetBrains Mono carries every figure so
-# digits stay in column. Both are loaded by the <link> injected in dashboard.py.
-font        = "Archivo, ui-sans-serif, system-ui, sans-serif"
-headingFont = "Archivo, ui-sans-serif, system-ui, sans-serif"
-codeFont    = "JetBrains Mono, ui-monospace, SFMono-Regular, monospace"
+# Newsreader carries everything you READ, IBM Plex Mono everything you MEASURE,
+# IBM Plex Sans the interface furniture in between. Set as a trio on purpose:
+# the previous Inter-on-near-black pairing was the default dark-dashboard look
+# and read as generated rather than designed.
+font        = "IBM Plex Sans, ui-sans-serif, system-ui, sans-serif"
+headingFont = "Newsreader, Georgia, Times New Roman, serif"
+codeFont    = "IBM Plex Mono, ui-monospace, SFMono-Regular, monospace"
 
 baseFontSize   = 15
-baseRadius     = "0.25rem"    # nearly square; rounded cards read as generic
+# Small radii, not pill shapes. Report figures sit in ruled boxes.
+baseRadius     = "0.25rem"
 buttonRadius   = "0.25rem"
 showWidgetBorder = true
 
-metricValueFontSize   = "2rem"
+metricValueFontSize   = "1.5rem"
 metricValueFontWeight = 600
 
-# amber, cyan, then neutrals — arm colours first, on purpose
-chartCategoricalColors = ["#f0873f", "#3fa9f5", "#8b95a6", "#6ee7c8", "#c9a227"]
-chartSequentialColors  = ["#101a26", "#16293c", "#1c3a55", "#234d71", "#2b628e", "#3479ac", "#3fa9f5"]
+# Arm colours first, in prefix order A/B/C.
+chartCategoricalColors = ["#8c2f39", "#15616d", "#4a6b2a", "#5d666a", "#8a6d1f"]
+chartSequentialColors  = ["#dde4e5", "#dfe4ea", "#c2ccd8", "#9aacc0", "#6d87a5", "#42648a", "#15616d"]
 
-orangeColor = "#f0873f"
-blueColor   = "#3fa9f5"
-grayColor   = "#8b95a6"
+redColor   = "#8c2f39"
+blueColor  = "#15616d"
+greenColor = "#4a6b2a"
+grayColor  = "#5d666a"
 
 [theme.sidebar]
-backgroundColor = "#0b0f15"
-borderColor     = "#212a37"
+backgroundColor = "#dde4e5"
+borderColor     = "#c8d1d3"
