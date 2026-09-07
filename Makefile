@@ -9,15 +9,21 @@ PROM_PORT = 9090
 # Use the venv's interpreters when they exist, otherwise whatever is on PATH.
 # Without this, every target here fails with "No such file or directory" unless
 # you remembered to `source .venv/bin/activate` first — which is a bad way to
-# find out your dashboard is fine and your shell was not.
+# find out your pipeline is fine and your shell was not.
 VENV      ?= .venv
 PY        := $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python)
-STREAMLIT := $(shell [ -x $(VENV)/bin/streamlit ] && echo $(VENV)/bin/streamlit || echo streamlit)
+
+# The web app lives in its own directory with its own toolchain. Declared here
+# for the same reason the ports are: one place to change it, and no target has
+# to remember to cd.
+WEB       := web
+NPM       := npm --prefix $(WEB)
 
 # These are names, not files. Without this line a stray file called "build" or
 # "deploy" would make the target look up to date and silently stop running.
 .PHONY: run build load deploy pods forward-prom \
-        load-start load-stop capacity collect bench ui retrain
+        load-start load-stop capacity collect bench retrain \
+        web-data web-dev web-build web-deploy
 
 # Local dev loop: 1s warm-up instead of 15s, and restart on every save.
 run:
@@ -118,13 +124,30 @@ bench:
 	@date -u +%s > bench/$(RUN).end
 	@echo "wrote bench/$(RUN).json  (window $(RUN).start -> $(RUN).end)"
 
-# --- the UI ------------------------------------------------------------------
-# Two pages. "Benchmark replay" needs nothing but bench/replay.json, so it works
-# with the cluster switched off. "Live forecast" needs `make forward-prom` and
-# traffic running, and is the view that shows a forecast beside what actually
-# happened next — the only check that catches train/serve skew.
-ui:
-	$(STREAMLIT) run dashboard.py
+# --- the public site ---------------------------------------------------------
+# A static Next.js app in web/, deployed on Vercel. It reads ONLY the committed
+# recordings, so it works forever with the cluster switched off — which is the
+# whole reason export_replay.py exists.
+#
+# The live forecast is deliberately NOT here. It needs Prometheus on
+# localhost:9090 and the LightGBM booster in-process, and Vercel is serverless
+# with neither. `python src/predictor.py` is the local view of that path, and
+# the check that catches train/serve skew.
+
+# Regenerate everything the site reads, from this repo's own artefacts. Run it
+# after new benchmark runs or a fresh backtest; the outputs are committed.
+web-data:
+	node $(WEB)/scripts/build-data.mjs
+
+web-dev: web-data
+	$(NPM) run dev
+
+web-build: web-data
+	$(NPM) run build
+
+# Vercel is authenticated per-machine via `vercel login`; nothing is stored here.
+web-deploy: web-build
+	cd $(WEB) && vercel deploy --prod
 
 # Re-freeze the benchmark runs out of Prometheus. Only needed after new runs;
 # Prometheus keeps 15 days, these files keep them forever. Both scenarios, so a

@@ -4,6 +4,9 @@ Forecast a service's request rate 60 seconds ahead and scale the deployment befo
 the traffic arrives — then measure whether it actually helps, against stock HPA
 under identical load.
 
+**[Live report → predictive-autoscaling.vercel.app](https://predictive-autoscaling.vercel.app)**
+— the measured results and a second-by-second replay of any run, no cluster required.
+
 **Result: p99 latency 62% lower than Kubernetes' built-in autoscaler, for 28% more
 pod-seconds** — three runs per arm, identical traffic. That is on a load ramp the model
 can anticipate. On an instantaneous spike it cannot, and it ties. Both results are below;
@@ -193,29 +196,42 @@ make bench RUN=B1r SCRIPT=ramp.js    # ... B2r, B3r
 python analyze.py                    # → results-r.md, outputs/comparison-r.png
 ```
 
-## The dashboard
+## The report site
+
+**Deployed: https://predictive-autoscaling.vercel.app** — a static Next.js app
+(`web/`), two routes:
+
+- **Overview** — the measured result, with every figure computed at build time from
+  `bench/replay*.json` and `outputs/results.csv`. Nothing on the page is a typed-in number.
+- **Benchmark replay** — scrub second by second through any recorded 20-minute run.
+  Pick either scenario: the gradual ramp compares two arms, the instant spike compares
+  three and shows the HPA-floor arm winning where forecasting alone lost. Charts draw
+  only up to the playhead, so dragging it replays the run.
+
+It reads only the recordings `export_replay.py` froze out of Prometheus, which are
+committed. So it needs no cluster and keeps working long after Prometheus' 15-day
+retention has discarded the original windows — which is the whole reason those files
+exist.
 
 ```bash
-make ui        # http://localhost:8501
+make web-dev      # localhost:3000
+make web-build    # static export -> web/out/
+make web-deploy   # build, then vercel deploy --prod
 ```
 
-Two pages. **Benchmark replay** steps through a recorded 20-minute run with the
-policies side by side — pod counts, arriving traffic, response times, and the
-controller's own forecasts at each moment. Pick either scenario: the gradual ramp
-compares two arms, the instant spike compares three and shows the HPA-floor arm
-winning where forecasting alone lost. It reads `bench/replay.json` and
-`bench/replay-step.json`, frozen out of Prometheus by `export_replay.py`, so it
-needs no cluster and keeps working after Prometheus' 15-day retention has discarded
-the runs.
+**The live forecast is not deployed, and cannot be.** It needs Prometheus on
+`localhost:9090` and the LightGBM booster loaded in-process; Vercel is serverless and
+has neither. Stubbing it with canned numbers would defeat its only purpose, which is
+catching train/serve skew. Locally it is:
 
-**Live forecast** loads the trained model and reads Prometheus directly: current
-rate, what the model expects 60 s ahead, and the pod count that implies. When the
-recent window has gaps it shows a *hold* rather than a number — that is `live.py`
-declining to answer on broken input, and it is the view that would have surfaced the
-train/serve bugs described below far earlier.
+```bash
+make forward-prom          # terminal 1
+python src/predictor.py    # terminal 2 — prints a forecast, changes nothing
+```
 
-Streamlit rather than a JS framework because the live page calls `live.fetch_recent()`
-and the model directly; a separate frontend would need an API written first.
+Watch that the prediction *leads* the current rate rather than echoing it. If it just
+mirrors "now", the model has degenerated to the naive baseline and something upstream
+is wrong — that is exactly how the two train/serve bugs below were caught.
 
 ## Limitations
 
@@ -248,8 +264,12 @@ the training path.
 
 ## Stack
 
-Python 3.14 · LightGBM (quantile objective) · pandas · pyarrow · FastAPI ·
+**Pipeline** — Python 3.14 · LightGBM (quantile objective) · pandas · pyarrow · FastAPI ·
 Kubernetes (kind) · Prometheus + kube-state-metrics · k6 · Docker
+
+**Report site** — Next.js 16 (App Router, static export) · React 19 · TypeScript ·
+Vercel. Charts are hand-rolled SVG: the whole chart is four paths and some text, and
+every library considered ships a theme that would fight the report styling.
 
 `models.py` carries an untested scikit-learn fallback for environments without a
 LightGBM wheel; every number here was produced by LightGBM.

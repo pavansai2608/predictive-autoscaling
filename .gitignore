@@ -29,3 +29,12 @@ logs/
 # Editor and agent state — local to one machine, not part of the project.
 .agents/
 .claude/
+
+# The web app's toolchain output. node_modules is reinstallable from
+# package-lock.json; .next and out are build artefacts of `make web-build`.
+# .vercel holds the project link, which is per-machine.
+web/node_modules/
+web/.next/
+web/out/
+web/*.tsbuildinfo
+.vercel

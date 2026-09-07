@@ -72,7 +72,8 @@ inside `src/`.
 
 ## Two numbers that must be MEASURED, never guessed
 
-Both MEASURED on 2026-08-22. Re-measure if `WORK_MS`, `STARTUP_DELAY_S` or the CPU
+Both MEASURED on 2026-08-19 (src/config.py and commit be0478a both say so).
+Re-measure if `WORK_MS`, `STARTUP_DELAY_S` or the CPU
 limit in `k8s/deployment.yaml` changes.
 
 - `C.HORIZON_STEPS = 4` (60s). Pod created -> Ready timed over three deletions: 19s,
@@ -86,8 +87,8 @@ limit in `k8s/deployment.yaml` changes.
 ## Commands
 
 ONE port-forward is the prerequisite for everything live. collect.py, live.py,
-predictor.py, analyze.py, export_replay.py and dashboard.py all hardcode
-`localhost:9090`:
+predictor.py, analyze.py and export_replay.py all hardcode `localhost:9090`. The
+public site does NOT — it reads committed JSON and never contacts the cluster:
 
 ```bash
 make forward-prom      # monitoring-kube-prometheus-prometheus 9090:9090
@@ -140,6 +141,17 @@ python analyze.py --suffix '' --event 5,9   # step scenario, all three arms -> r
 make replay-data                       # refreeze both scenarios -> bench/replay*.json
 ```
 
+The public site (static Next.js in `web/`, deployed on Vercel). It reads ONLY the
+committed `bench/replay*.json` plus a derived `backtest.json`, so it works with the
+cluster switched off:
+
+```bash
+make web-data          # regenerate web/public/data/ from bench/ and outputs/results.csv
+make web-dev           # next dev on localhost:3000
+make web-build         # static export -> web/out/
+make web-deploy        # web-build, then `vercel deploy --prod` from web/
+```
+
 `controller.py` also reads `DEPLOYMENT`, `NAMESPACE`, `INTERVAL_S`, `HEADROOM`, `MIN_PODS`,
 `MAX_PODS` from the env, and appends every decision to `logs/decisions.csv`.
 
@@ -147,7 +159,25 @@ There is no test suite and no linter configured. The backtest **is** the correct
 the forecasting side: read `outputs/results.csv` top-down, lowest **cost** wins. If a baseline
 beats the GBM, that is a real finding to report, not a bug to hide.
 
-## Results — MEASURED, 2026-08-24
+## Deployment
+
+**Live: https://predictive-autoscaling.vercel.app**
+
+| What | Where | Why |
+|------|-------|-----|
+| Overview + Benchmark replay | Vercel, static (`web/`, `output: 'export'`) | They read only committed JSON. No cluster, no model, no server. |
+| Live forecast | **Local only**, `python src/predictor.py` | It needs Prometheus on `localhost:9090` AND the LightGBM booster loaded in-process. Vercel is serverless and has neither: there is no cluster to reach and nowhere to hold a 1.1 MB joblib model between requests. Faking it with canned numbers would make the one page whose job is to catch train/serve skew incapable of catching it. |
+
+There is no Streamlit any more. `dashboard.py` and `.streamlit/` were deleted, and
+`streamlit`/`altair` dropped from requirements.txt. `src/predictor.py` is what
+exercises the live inference path now — and it always was the check CLAUDE.md
+named for train/serve skew; the dashboard's live page was a second view of it.
+
+The site's numbers are COMPUTED at build time, never typed in: `web/scripts/build-data.mjs`
+derives them from `bench/replay*.json` and `outputs/results.csv`. That script is the only
+thing allowed to copy a number out of the repo's artefacts.
+
+## Results — MEASURED, 2026-08-30
 
 Backtest, 4 folds, 12,277 rows: `gbm_q0.90` cost 4,295 vs naive 12,094 — **64.5% lower**.
 The mean-targeting GBM has half the MAE (2.24 vs 4.77) and costs 31% MORE, which is the
@@ -246,8 +276,13 @@ analyze.py             scores the A/B -> results-*.md + outputs/comparison-*.png
 export_replay.py       freezes benchmark windows out of Prometheus before the 15-day
                        retention eats them -> bench/replay*.json
 retrain.py             scores a fresh candidate against the live model, swaps on a win
-dashboard.py           the Streamlit UI: benchmark replay + live forecast
-.streamlit/config.toml theme only. Amber = reactive arm, cyan = predictive, everywhere
+web/                   the PUBLIC site: static Next.js (App Router, TypeScript),
+                       deployed on Vercel. Routes / (Overview) and /benchmark.
+                       web/scripts/build-data.mjs is the ONLY thing that derives
+                       numbers from bench/ and outputs/ — one source of truth.
+                       Arm colours are wine #8c2f39 (A) / teal #15616d (B) /
+                       moss #4a6b2a (C), each ALSO keyed by a line dash, because
+                       the three fail a colourblind-separation check on colour alone.
 
 k8s/deployment.yaml    requests == limits == 400m (see Results for why)
 k8s/service.yaml       ClusterIP; the only way load reaches pods
@@ -274,7 +309,9 @@ src/live.py            Prometheus -> one inference-shaped feature row (+ freshne
 src/predictor.py       dry-run forecaster — the ONLY check for train/serve skew
 src/controller.py      the predictive autoscaler
 
-data/traffic.parquet   12,281 rows, 51h, 100% coverage. NOT gitignored: Prometheus
+data/traffic.parquet   12,281 rows, 51.2458h, 99.846% coverage — ONE 300s gap at
+                       2026-08-21T18:33:00Z (19 rows missing of an expected 12,300).
+                       NOT gitignored: Prometheus
                        keeps 15 days, so this is the one unreproducible artefact.
 bench/*.json           benchmark runs + their start/end epochs. A/B/C = HPA alone /
                        predictive owns replicas / predictive + HPA floor; the `r`

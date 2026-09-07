@@ -1,0 +1,23 @@
+{
+  "name": "predictive-autoscaling-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static report site for the predictive-autoscaling benchmark. Reads only committed JSON; never contacts the cluster.",
+  "scripts": {
+    "data": "node scripts/build-data.mjs",
+    "dev": "npm run data && next dev",
+    "build": "npm run data && next build",
+    "start": "npx serve out"
+  },
+  "dependencies": {
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "typescript": "^7.0.2"
+  }
+}
